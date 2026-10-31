@@ -1,5 +1,6 @@
 """The ops. GENERATE_BGM (roadmap step 2, ADR-004): a music bed from a prompt and / or tags, a target duration and a
-seed, written as a WAV with its provenance. GENERATE_SFX (step 3) and library mode (step 4) come later.
+seed, written as a WAV with its provenance. GENERATE_SFX (step 3, ADR-006): the same frame for a sound effect, on
+EzAudio (ADR-005). Library mode (step 4) comes later.
 
 GENERATE_BGM, step by step (the frame of voice-enhance-skill's ops: checks first, the engine in the worker, the result
 validated through ffmpeg-skill, then one rename):
@@ -17,7 +18,12 @@ validated through ffmpeg-skill, then one rename):
   7. validate   ffmpeg-skill/probe on the WAV: readable, one audio stream at the engine's sample rate, duration within
                 max(0.1 s, 1 %) of the request (else INVALID_RESULT)
   8. place      the WAV is renamed into place (it replaces nothing unless --overwrite); the run directory is removed
-Nothing is written to the output path unless every step passes."""
+Nothing is written to the output path unless every step passes.
+
+GENERATE_SFX runs the same eight steps with these differences: no lyrics; the prompt is < 512 characters (EzAudio's
+T5 encoder reads at most 100 tokens and the result warns when the prompt is certainly longer); the duration is a
+whole number of seconds inside the engine's range (EzAudio: 1-10 s); the device is auto / cuda / cpu; the engine's
+output warning (EzAudio: its training audio) is copied into every result."""
 from __future__ import annotations
 
 import os
@@ -29,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import SKILL_ID, __version__
 from .engines import DEFAULT_ENGINE, engines_for, get_engine
+from .engines import ezaudio
 from .engines.acestep import DEVICES, MAX_CAPTION, MAX_LYRICS
 from .engines.base import OK, Engine, EngineRequest
 from .errors import SoundDesignError
@@ -37,8 +44,13 @@ from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine
 
 BGM_SCHEMA = f"{SKILL_ID}/generate-bgm@1"
+SFX_SCHEMA = f"{SKILL_ID}/generate-sfx@1"
 DURATION_TOLERANCE = 0.1             # seconds, or 1 % of the requested duration when that is larger
 OUTPUT_NAME = "bgm.wav"
+SFX_OUTPUT_NAME = "sfx.wav"
+SFX_DEVICES = ezaudio.DEVICES
+SFX_MAX_PROMPT = ezaudio.MAX_PROMPT
+SFX_TIMEOUT = 600.0
 
 
 @dataclass
@@ -57,6 +69,21 @@ class BgmRequest:
     offline: bool = False
 
 
+@dataclass
+class SfxRequest:
+    output_path: str
+    duration: float
+    prompt: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    seed: Optional[int] = None
+    engine: Optional[str] = None
+    device: str = "auto"
+    timeout: float = SFX_TIMEOUT
+    overwrite: bool = False
+    ffmpeg_skill_dir: Optional[str] = None
+    offline: bool = False
+
+
 def caption_from(prompt: Optional[str], tags: List[str]) -> str:
     """The engine's caption: the prompt text, then the tags, comma-separated (ACE-Step takes one caption string)."""
     parts = [prompt.strip()] if isinstance(prompt, str) and prompt.strip() else []
@@ -68,22 +95,28 @@ def tolerance_for(duration: float) -> float:
     return max(DURATION_TOLERANCE, 0.01 * duration)
 
 
-def _check_args(req: BgmRequest) -> Tuple[str, Optional[str]]:
-    """Returns (caption, lyrics text or None). Pure checks; nothing is written."""
+def _check_common(req: Any, what: str, max_caption: int, devices: Tuple[str, ...]) -> str:
+    """Timeout, tags, caption, seed and device, shared by the ops. Returns the caption. Pure checks."""
     if isinstance(req.timeout, bool) or not isinstance(req.timeout, (int, float)) or req.timeout <= 0:
         raise SoundDesignError("INVALID_ARGUMENT", "--timeout must be > 0", {"timeout": req.timeout})
     if not isinstance(req.tags, list) or not all(isinstance(t, str) for t in req.tags):
         raise SoundDesignError("INVALID_ARGUMENT", "tags must be a list of strings", {"tags": req.tags})
     caption = caption_from(req.prompt, req.tags)
     if not caption:
-        raise SoundDesignError("INVALID_ARGUMENT", "give --prompt and / or --tags: the music needs a description")
-    if len(caption) > MAX_CAPTION:
+        raise SoundDesignError("INVALID_ARGUMENT", f"give --prompt and / or --tags: the {what} needs a description")
+    if len(caption) > max_caption:
         raise SoundDesignError("INVALID_ARGUMENT", f"prompt and tags are {len(caption)} characters together; the engine takes "
-                               f"< {MAX_CAPTION}", {"length": len(caption)})
+                               f"< {max_caption}", {"length": len(caption)})
     if req.seed is not None and (isinstance(req.seed, bool) or not isinstance(req.seed, int) or not 0 <= req.seed < 2 ** 32):
         raise SoundDesignError("INVALID_ARGUMENT", "--seed must be an integer in [0, 2**32)", {"seed": req.seed})
-    if req.device not in DEVICES:
-        raise SoundDesignError("INVALID_ARGUMENT", f"--device must be one of {', '.join(DEVICES)}", {"device": req.device})
+    if req.device not in devices:
+        raise SoundDesignError("INVALID_ARGUMENT", f"--device must be one of {', '.join(devices)}", {"device": req.device})
+    return caption
+
+
+def _check_args(req: BgmRequest) -> Tuple[str, Optional[str]]:
+    """Returns (caption, lyrics text or None). Pure checks; nothing is written."""
+    caption = _check_common(req, "music", MAX_CAPTION, DEVICES)
     lyrics = None
     if req.lyrics_path is not None:
         if not os.path.isfile(req.lyrics_path):
@@ -187,6 +220,21 @@ def _place(path: str, dst: str, overwrite: bool) -> None:
     os.replace(path, dst)
 
 
+def _run_validated(engine: Engine, request: EngineRequest, timeout: float, run_dir: str,
+                   skill: FfmpegSkill) -> Tuple[Any, Dict[str, Any]]:
+    """Steps 6-7: the worker writes `request.output_path` in `run_dir`; the file must be the one requested, made with
+    the requested seed, and pass ffmpeg-skill/probe. Returns (EngineResult, probe facts)."""
+    wav = request.output_path
+    result = run_engine(engine.id, request, timeout, run_dir)
+    if os.path.realpath(result.output_path) != os.path.realpath(wav) or not os.path.isfile(wav):
+        raise SoundDesignError("INVALID_RESULT", f"engine {engine.id!r} did not write the requested file", {"engine": engine.id})
+    if result.seed != request.seed:
+        raise SoundDesignError("INVALID_RESULT", f"engine {engine.id!r} ran with seed {result.seed}, not {request.seed}",
+                               {"engine": engine.id, "seed": request.seed, "used_seed": result.seed})
+    facts = validate_output(skill, wav, result.sample_rate, float(request.duration), engine.id)
+    return result, facts
+
+
 def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
     """GENERATE_BGM: one music bed as a WAV at `req.output_path`, with its provenance. `skill` is the ffmpeg-skill
     handle (located from `req.ffmpeg_skill_dir` when None)."""
@@ -203,14 +251,9 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
     run_dir = _run_dir(os.path.dirname(dst), req.output_path)
     try:
         wav = os.path.join(run_dir, OUTPUT_NAME)
-        result = run_engine(engine.id, EngineRequest(op="bgm", prompt=caption, duration=duration, output_path=wav, seed=seed,
-                                                     lyrics=lyrics, params={"device": req.device}), float(req.timeout), run_dir)
-        if os.path.realpath(result.output_path) != os.path.realpath(wav) or not os.path.isfile(wav):
-            raise SoundDesignError("INVALID_RESULT", f"engine {engine.id!r} did not write the requested file", {"engine": engine.id})
-        if result.seed != seed:
-            raise SoundDesignError("INVALID_RESULT", f"engine {engine.id!r} ran with seed {result.seed}, not {seed}",
-                                   {"engine": engine.id, "seed": seed, "used_seed": result.seed})
-        facts = validate_output(skill, wav, result.sample_rate, duration, engine.id)
+        result, facts = _run_validated(engine, EngineRequest(op="bgm", prompt=caption, duration=duration, output_path=wav,
+                                                             seed=seed, lyrics=lyrics, params={"device": req.device}),
+                                       float(req.timeout), run_dir, skill)
         measured = float(facts.get("duration") or 0.0)
         engine_doc = dict(report, version=result.engine_version, model=result.model)
         parameters = {"tags": [t.strip() for t in req.tags if t.strip()], "prompt_given": caption_from(req.prompt, []) or None,
@@ -245,4 +288,62 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
         "handoff": {"to": "audio-production-skill MIX", "path": dst, "note": "placed under the programme there; nothing is "
                                                                               "mixed here"},
         "warnings": [],
+    }
+
+
+def generate_sfx(req: SfxRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:
+    """GENERATE_SFX (ADR-006): one sound effect as a WAV at `req.output_path`, with its provenance. Same frame as
+    GENERATE_BGM: every check first, the engine in the worker, ffmpeg-skill/probe, one rename."""
+    caption = _check_common(req, "effect", SFX_MAX_PROMPT, SFX_DEVICES)
+    dst = check_output(req.output_path, req.overwrite)
+    engine, report = select_engine("sfx", req.engine, req.offline)
+    engine.validate(EngineRequest(op="sfx", prompt=caption, duration=req.duration, output_path=dst, seed=req.seed))
+    duration = float(req.duration)
+    skill, info = usable_skill(skill, req.ffmpeg_skill_dir, float(req.timeout))
+    seed_source = "given" if req.seed is not None else "drawn"
+    seed = req.seed if req.seed is not None else secrets.randbelow(2 ** 32)
+    warnings: List[str] = []
+    if engine.spec.output_warning:
+        warnings.append(engine.spec.output_warning)
+    if len(caption.split()) > ezaudio.T5_MAX_TOKENS:
+        warnings.append(f"the prompt has more than {ezaudio.T5_MAX_TOKENS} words; EzAudio's text encoder reads at most "
+                        f"{ezaudio.T5_MAX_TOKENS} tokens and drops the rest")
+    run_dir = _run_dir(os.path.dirname(dst), req.output_path)
+    try:
+        wav = os.path.join(run_dir, SFX_OUTPUT_NAME)
+        result, facts = _run_validated(engine, EngineRequest(op="sfx", prompt=caption, duration=duration, output_path=wav,
+                                                             seed=seed, params={"device": req.device}),
+                                       float(req.timeout), run_dir, skill)
+        measured = float(facts.get("duration") or 0.0)
+        engine_doc = dict(report, version=result.engine_version, model=result.model)
+        parameters = {"tags": [t.strip() for t in req.tags if t.strip()], "prompt_given": caption_from(req.prompt, []) or None,
+                      "seed_source": seed_source, "device": result.extra.get("device"), "requested_device": req.device,
+                      "sample_rate": result.sample_rate, "engine_api": result.extra.get("api"),
+                      "generate_audio": result.extra.get("generate_audio"), "text_encoder": result.extra.get("text_encoder"),
+                      "timeout": float(req.timeout)}
+        provenance = build_provenance(op="sfx", engine=engine_doc, prompt=caption, seed=seed,
+                                      duration={"requested": duration, "measured": measured,
+                                                "tolerance": tolerance_for(duration)},
+                                      output_path=wav, parameters=parameters, ffmpeg_skill=info.to_dict())
+        _place(wav, dst, req.overwrite)
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+    a = facts.get("audio") or {}
+    return {
+        "schema": SFX_SCHEMA,
+        "ok": True,
+        "op": "sfx",
+        "capability": "audio.sfx_generate",
+        "skill": {"id": SKILL_ID, "version": __version__},
+        "output": {"path": dst, "format": "wav", "codec": a.get("codec"), "sample_rate": a.get("sample_rate"),
+                   "channels": a.get("channels"), "duration": measured, "sha256": provenance["output"]["sha256"]},
+        "request": {"prompt": caption, "duration": duration, "seed": seed, "seed_source": seed_source},
+        "engine": {k: engine_doc.get(k) for k in ("id", "version", "model", "code_license", "weights_license", "output_use",
+                                                   "training_data")},
+        "steps": [{"tool": f"{SKILL_ID}/worker", "engine": engine.id}, {"tool": "ffmpeg-skill/probe", "result":
+                  {"duration": measured, "sample_rate": a.get("sample_rate"), "channels": a.get("channels")}}],
+        "provenance": provenance,
+        "handoff": {"to": "audio-production-skill MIX", "path": dst, "note": "placed in the programme there; nothing is "
+                                                                              "mixed here"},
+        "warnings": warnings,
     }

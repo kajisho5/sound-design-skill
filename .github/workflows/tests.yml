@@ -30,8 +30,8 @@ jobs:
       - name: doctor (no engine, no ffmpeg-skill here; exit 1 = status fail is expected)
         shell: bash
         run: sound-design doctor --json --ffmpeg-skill "$RUNNER_TEMP/none" > doctor.json || test $? -eq 1
-      - name: doctor lists ACE-Step as MISSING with an install line, and reports the device
-        run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['acestep'], e; assert e['acestep']['status']=='MISSING' and e['acestep']['install'], e; dev=d['checks']['device']; assert dev['status'] in ('OK','CPU_ONLY','UNKNOWN') and 'vram_total_mb' in dev, dev"
+      - name: doctor lists ACE-Step and EzAudio as MISSING with an install line, and reports the device
+        run: python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); e=d['checks']['engines']; assert sorted(e)==['acestep','ezaudio'], e; assert all(e[k]['status']=='MISSING' and e[k]['install'] for k in e), e; assert d['checks']['operations']['sfx']['engine']=='ezaudio', d['checks']['operations']; dev=d['checks']['device']; assert dev['status'] in ('OK','CPU_ONLY','UNKNOWN') and 'vram_total_mb' in dev, dev"
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract and probe) and
@@ -61,7 +61,7 @@ jobs:
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log
           ! grep -E "\.\.\. skipped" test.log
-      - name: doctor against the real ffmpeg-skill (engine MISSING -> degraded, exit 0)
+      - name: doctor against the real ffmpeg-skill (engines MISSING -> degraded, exit 0)
         run: |
           sound-design doctor --json --ffmpeg-skill vendor/ffmpeg-skill | tee doctor.json
-          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert list(d['checks']['engines'])==['acestep']"
+          python -c "import json; d=json.load(open('doctor.json', encoding='utf-8')); assert d['status']=='degraded' and d['checks']['ffmpeg_skill']['status']=='OK', d['problems']; assert list(d['checks']['engines'])==['acestep','ezaudio']"

@@ -2,6 +2,33 @@
 
 ## 0.1.0 - unreleased
 
+SFX engine and GENERATE_SFX (roadmap step 3, ADR-005, ADR-006).
+
+- ADR-005: the SFX engine is EzAudio (`ezaudio`), checked from primary sources:
+  - code MIT (haidog-yaqub/EzAudio `LICENSE`), weights MIT (HF `OpenSound/EzAudio`), text encoder `google/flan-t5-xl` Apache-2.0;
+  - no statement about the output anywhere; the licences do not restrict it;
+  - trained on AudioSet / VGGSound / AudioCaps (YouTube audio, not licensed for training by its owners). This is recorded as `training_data` and `output_warning` in the `EngineSpec`, every result's `warnings` and every provenance.
+- Also checked for SFX. Rejected:
+  - Stable Audio Open 1.0 / Small: the Stability AI Community License, now read, ends commercial use above USD 1M revenue;
+  - AudioLDM / AudioLDM2: CC BY-NC-SA code and weights;
+  - AudioGen, Tango / Tango 2, TangoFlux, MMAudio, AudioX and Auffusion: non-commercial;
+  - ThinkSound: the README forbids commercial use;
+  - SoundCTM: it needs AudioLDM's non-commercial VAE at inference.
+
+  Unverified: HunyuanVideo-Foley (licence text not read), and GenAU, AudioLCM, Make-An-Audio 2 and Kling-Foley (no public model found).
+- `sound-design generate-sfx --prompt/--tags --duration <whole s> -o out.wav [--seed] [--device auto|cuda|cpu] --json`. Result schema `sound-design/generate-sfx@1`; `audio.sfx_generate` is `EXPERIMENTAL`; default timeout 600 s.
+- EzAudio is called through its Python API as read from haidog-yaqub/EzAudio@86f18268: `EzAudio(model_name="s3_xl", ckpt_path=<checkout>/ckpts/s3/ezaudio_s3_xl.pt, vae_path=<checkout>/ckpts/vae/1m.pt, device)`, then `generate_audio(prompt, length=<s>, guidance_scale=5, guidance_rescale=0.75, ddim_steps=100, eta=1, random_seed=seed, randomize_seed=False)`. The result is written once as 16-bit PCM with soundfile. This runs in the worker only, under `SOUND_DESIGN_EZAUDIO_PYTHON`, from the checkout directory.
+- No download is possible:
+  - doctor and the worker require the checkpoints and the Flan-T5-XL cache snapshot first;
+  - both checkpoint paths are passed;
+  - `EzAudio.download_ckpt` is replaced with a refusal;
+  - Hugging Face stays offline;
+  - netguard blocks every non-loopback socket.
+- The duration is whole seconds: EzAudio feeds `length * 50` to `torch.randn` as a size.
+- Doctor lists `ezaudio` (`OK` / `MISSING` / `INCOMPATIBLE`; the checkout's API is detected from `api/ezaudio.py`, its commit read from `.git`), and the SFX op as implemented. The CI doctor checks expect both engines.
+- `EngineSpec.output_warning` is new. The provenance engine fields gain `training_data` and `output_warning`.
+- Tests run a fake EzAudio checkout with the verified API (deterministic audio for seed and length) through a stub ffmpeg-skill and, in the integration job, the real ffmpeg-skill probe. Real-engine determinism, duration accuracy and memory are not measured yet.
+
 GENERATE_BGM (roadmap step 2, ADR-004).
 
 - `sound-design generate-bgm --prompt/--tags --duration -o out.wav [--seed] [--lyrics] [--device] --json`. Result schema `sound-design/generate-bgm@1`; `audio.bgm_generate` is `EXPERIMENTAL`.

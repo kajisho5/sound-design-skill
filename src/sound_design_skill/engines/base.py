@@ -52,6 +52,7 @@ class EngineSpec:
     network_required: bool = False            # at run time; no engine registered here needs it
     deterministic: bool = False               # the seed is fixed and recorded; bit-exact repeats on the real engine are unverified (ADR-004)
     lm_status: str = ""                       # whether a language-model stage is used, and why (ADR-004)
+    output_warning: Optional[str] = None      # a caution every result from this engine carries (ADR-005); None = none
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -159,7 +160,8 @@ class Engine:
             raise SoundDesignError("INVALID_ARGUMENT", "seed must be an integer in [0, 2**32)", {"engine": self.id, "seed": req.seed})
 
     def process(self, req: EngineRequest) -> EngineResult:
-        """Overridden by engines that generate (ACE-Step since roadmap step 2); the default is NOT_IMPLEMENTED."""
+        """Overridden by engines that generate (ACE-Step since roadmap step 2, EzAudio since step 3); the default is
+        NOT_IMPLEMENTED."""
         self.validate(req)
         self.require()
         raise SoundDesignError("NOT_IMPLEMENTED", f"engine {self.id!r} is installed, but generation is not implemented yet "

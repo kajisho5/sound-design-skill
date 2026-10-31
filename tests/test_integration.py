@@ -1,7 +1,7 @@
 """Integration with a real ffmpeg-skill checkout and a real FFmpeg: locate it, check every tool and flag this skill
-uses against its live contract, run its doctor, probe a WAV through it, and run GENERATE_BGM end to end through the
-CLI (the real worker with the fake ACE-Step engine of tests/helpers.py, the result validated by the real
-ffmpeg-skill/probe). Skipped without a checkout (SOUND_DESIGN_FFMPEG_SKILL_DIR or ../ffmpeg-skill); CI's integration
+uses against its live contract, run its doctor, probe a WAV through it, and run GENERATE_BGM and GENERATE_SFX end to
+end through the CLI (the real worker with the fake ACE-Step engine / fake EzAudio checkout of tests/helpers.py, the
+result validated by the real ffmpeg-skill/probe). Skipped without a checkout (SOUND_DESIGN_FFMPEG_SKILL_DIR or ../ffmpeg-skill); CI's integration
 job always has one."""
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ import shutil
 import tempfile
 import unittest
 
-from helpers import FFMPEG_SKILL_DIR, env, fake_acestep_engine, fake_checkpoints, no_engines_env, run_cli, write_tone_wav
+from helpers import (FFMPEG_SKILL_DIR, env, fake_acestep_engine, fake_checkpoints, fake_ezaudio_engine, no_engines_env, run_cli,
+                     write_tone_wav)
 
 from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
@@ -46,8 +47,9 @@ class FfmpegSkillIntegrationTests(unittest.TestCase):
             rc, cli_doc = run_cli("doctor", "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")
         self.assertEqual(d["checks"]["ffmpeg_skill"]["status"], "OK", d["problems"])
         self.assertEqual((d["checks"]["ffmpeg"]["status"], d["checks"]["ffprobe"]["status"]), ("OK", "OK"))
-        self.assertEqual(sorted(d["checks"]["engines"]), ["acestep"])
-        self.assertIn(d["checks"]["engines"]["acestep"]["status"], ("MISSING", "INCOMPATIBLE"))
+        self.assertEqual(sorted(d["checks"]["engines"]), ["acestep", "ezaudio"])
+        for eid in ("acestep", "ezaudio"):
+            self.assertIn(d["checks"]["engines"][eid]["status"], ("MISSING", "INCOMPATIBLE"))
         self.assertIn(d["checks"]["device"]["status"], ("OK", "CPU_ONLY", "UNKNOWN"))
         self.assertEqual(d["status"], "degraded")
         self.assertEqual((rc, cli_doc["status"]), (0, d["status"]))
@@ -95,6 +97,53 @@ class GenerateBgmIntegrationTests(unittest.TestCase):
         self.assertEqual((rc, doc["error"]["code"]), (4, "INVALID_RESULT"))
         self.assertIn("duration", doc["error"]["message"])
         self.assertFalse(os.path.exists(out))
+
+
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class GenerateSfxIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.out_dir = os.path.join(self.dir, "out")
+        os.mkdir(self.out_dir)
+        cm = env(**no_engines_env(self.dir))
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        engine_cm = fake_ezaudio_engine(self.dir)
+        self.fake = engine_cm.__enter__()
+        self.addCleanup(engine_cm.__exit__, None, None, None)
+
+    def cli(self, name, *extra):
+        out = os.path.join(self.out_dir, name)
+        return out, run_cli("generate-sfx", "--prompt", "a wooden door closes", "--tags", "indoor", "--duration", "3",
+                            "-o", out, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json", *extra)
+
+    def test_effect_validated_by_the_real_probe_and_repeatable_by_seed(self):
+        out, (rc, doc) = self.cli("a.wav", "--seed", "2026")
+        self.assertEqual(rc, 0, doc)
+        skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+        facts = skill.probe(out)
+        self.assertAlmostEqual(float(facts["duration"]), 3.0, delta=0.05)
+        self.assertEqual((facts["audio"]["sample_rate"], facts["audio"]["channels"]), (24000, 1))
+        self.assertEqual(doc["provenance"]["ffmpeg_skill"]["version"], skill.info().version)
+        self.assertEqual((doc["provenance"]["seed"], doc["provenance"]["engine"]["id"]), (2026, "ezaudio"))
+        self.assertEqual(doc["provenance"]["prompt"]["text"], "a wooden door closes, indoor")
+        self.assertTrue(doc["warnings"])
+        _, (rc2, doc2) = self.cli("b.wav", "--seed", "2026")
+        _, (rc3, doc3) = self.cli("c.wav", "--seed", "2027")
+        self.assertEqual((rc2, rc3), (0, 0))
+        self.assertEqual(doc2["output"]["sha256"], doc["output"]["sha256"])
+        self.assertNotEqual(doc3["output"]["sha256"], doc["output"]["sha256"])
+        self.assertEqual(sorted(os.listdir(self.out_dir)), ["a.wav", "b.wav", "c.wav"])
+
+    def test_an_effect_of_the_wrong_length_is_refused_by_the_real_probe(self):
+        self.fake["set_mode"]("short")
+        out, (rc, doc) = self.cli("short.wav", "--seed", "1")
+        self.assertEqual((rc, doc["error"]["code"]), (4, "INVALID_RESULT"))
+        self.assertIn("duration", doc["error"]["message"])
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(os.listdir(self.out_dir), [])
 
 
 if __name__ == "__main__":

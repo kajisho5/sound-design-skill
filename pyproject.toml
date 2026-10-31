@@ -10,9 +10,10 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
 authors = [{name = "kajisho5"}]
-keywords = ["bgm", "music-generation", "sound-effects", "sfx", "ace-step", "offline", "agent-skill", "video-production"]
-# stdlib only. Engines are not extras on purpose (ADR-001, ADR-002): ACE-Step 1.5 is installed in its own environment
-# (it pins torch, Python 3.11-3.12) and found by doctor.
+keywords = ["bgm", "music-generation", "sound-effects", "sfx", "ace-step", "ezaudio", "offline", "agent-skill", "video-production"]
+# stdlib only. Engines are not extras on purpose (ADR-001, ADR-002, ADR-005): ACE-Step 1.5 (it pins torch, Python
+# 3.11-3.12) and EzAudio (a git checkout with unpinned requirements) are installed in their own environments and found
+# by doctor.
 dependencies = []
 
 [project.scripts]
