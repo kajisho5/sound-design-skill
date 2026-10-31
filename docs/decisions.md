@@ -116,3 +116,67 @@ The contract carries Japanese text (the ownership names from `ecosystem.json`, s
 - Every JSON document is written with `ensure_ascii=True`: non-ASCII text appears as `\u` escapes. Any consumer on any code page parses the same document, and the decoded strings are unchanged. The worker's request and result files are ASCII too.
 - Human-readable output (no `--json`) uses `errors="backslashreplace"` on stdout and stderr, so a console that cannot show Japanese prints escapes instead of crashing.
 - A unit test runs the CLI with `PYTHONIOENCODING=cp1252` and checks that the JSON is pure ASCII and still decodes to the Japanese text. The CI steps open `doctor.json` explicitly as UTF-8.
+
+## ADR-004 GENERATE_BGM op: ACE-Step's Python API in the worker, DiT only, no download path reachable, validated through ffmpeg-skill
+
+### Context
+
+Roadmap step 2: prompt / tags, duration and seed, with provenance that records the engine, the seed and the licence. It is done when the duration is within tolerance and the seed is deterministic, verified on the engine. ADR-001 left three things for this step: pass local checkpoint paths so that neither Hugging Face nor ModelScope is contacted (the Hugging Face offline variables do not cover ModelScope), measure determinism and the duration tolerance, and keep the 5 Hz LM off until the Qwen3 base licences are checked. The frame follows voice-enhance-skill ADR-003 (`ops.py` on main): checks before any work, the engine in the worker, the result validated through ffmpeg-skill, then one rename.
+
+### ACE-Step 1.5's API, as read from its source
+
+Read only, from ace-step/ACE-Step-1.5 at commit `ca1e85fe9430179831e6bc6be790c332190a3866` (2026-08-29; `pyproject.toml` still `version = "1.5.0"`). Nothing was installed or run, and no weights were downloaded.
+
+| What | Where (at that commit) | What this skill relies on |
+|---|---|---|
+| Entry points | `docs/en/INFERENCE.md` Quick Start; `acestep/inference.py` `generate_music(dit_handler, llm_handler, params, config, save_dir=None, progress=None) -> GenerationResult` | `AceStepHandler()` from `acestep.handler`, `GenerationParams`, `GenerationConfig` and `generate_music` from `acestep.inference` |
+| DiT start-up | `acestep/core/generation/handler/init_service_orchestrator.py` `initialize_service(project_root, config_path, device="auto", ..., prefer_source=None, use_mlx_dit=True, vae_checkpoint=None) -> (status, ok)`; every exception is caught and returned as `(message, False)` | `config_path="acestep-v15-turbo"`, `device` from `auto` / `cuda` / `mps` / `xpu` / `cpu` (`init_service_setup.py` `_resolve_initialize_device`), `vae_checkpoint="official"` (`model_downloader.DEFAULT_VAE_VARIANT`) |
+| Checkpoint directory | same file: `ACESTEP_CHECKPOINTS_DIR` wins over `<project_root>/checkpoints` (`model_downloader.get_checkpoints_dir`) | the worker sets `ACESTEP_CHECKPOINTS_DIR` to the directory doctor found (`SOUND_DESIGN_ACESTEP_CHECKPOINTS`, or the Hugging Face cache snapshot) |
+| Downloads | `init_service_downloads.py` `_ensure_models_present` calls `ensure_main_model` when `check_main_model_exists` is false, and `ensure_dit_model` when `check_model_exists(config_path)` is false. `model_downloader.py`: `MAIN_MODEL_COMPONENTS = [acestep-v15-turbo, vae, Qwen3-Embedding-0.6B, acestep-5Hz-lm-1.7B]`; a component exists when its directory holds one of eight weight file names (`_contains_model_weights`); `_smart_download` probes `www.google.com:443` with a raw socket (`_can_access_google`) and then downloads from Hugging Face or ModelScope, falling back to the other | see Decision: checked first, download functions replaced, sockets blocked |
+| LM | `inference.py` line 655: `use_lm = (thinking or use_cot_*) and llm_handler is not None and llm_handler.llm_initialized and ...` | `llm_handler=None`, and `thinking` and every `use_cot_*` are false |
+| Seed | `inference.py` line 613 and `task_utils.py` `prepare_seeds`: with `use_random_seed=False` and `seeds=[s]`, a batch of one runs with seed `s`; each audio's `params["seed"]` reports the seed used | `GenerationConfig(batch_size=1, use_random_seed=False, seeds=[seed])`; the returned seed is compared with the request |
+| Output | `inference.py` lines 1047-1060: the audio is written to `save_dir/<key>.<format>` and returned as `audios[i]["path"]`, with `sample_rate` (48000) | `audio_format="wav"` (soundfile PCM), one audio, moved to the run directory's `bgm.wav` |
+| Text limits | `GenerationParams` docstring: caption < 512 characters, lyrics < 4096, `"[Instrumental]"` for instrumental songs, duration 10-600 s | the same limits are checked before the worker starts |
+
+`docs/en/INFERENCE.md`'s field list is older than the source (it lacks fields such as `enable_normalization`), so only names present in `acestep/inference.py` are passed. Defaults that are left alone: `inference_steps=8` (turbo), `enable_normalization=True` at `normalization_db=-1.0`, `infer_method="ode"`.
+
+### Decision
+
+- **Command.** `sound-design generate-bgm [--prompt <text>] [--tags a,b,...] --duration <s> -o <out.wav> [--seed N] [--lyrics <file>] [--engine acestep] [--device auto|cuda|mps|xpu|cpu] [--timeout 3600] [--overwrite] [--ffmpeg-skill DIR] [--offline] --json`. The prompt and the tags are joined with ", " into ACE-Step's one caption. Result schema `sound-design/generate-bgm@1`: `output` (path, codec, rate, channels, measured duration, SHA-256), `request` (caption, duration, seed, `seed_source` given / drawn), `engine`, `steps`, `provenance`, `handoff` (audio-production-skill MIX), `warnings`. `audio.bgm_generate` moves to `EXPERIMENTAL`.
+- **Checks before any work, cheapest first.**
+  1. Arguments: caption non-empty and < 512 characters, seed in `[0, 2**32)`, device, lyrics file (UTF-8, < 4096 characters), timeout.
+  2. Output: a `.wav`, not a directory, not existing unless `--overwrite`, not the lyrics file, in an existing directory.
+  3. Engine: `OK`, else `ENGINE_UNAVAILABLE` / `MODEL_NOT_FOUND` with the install line; then its duration window.
+  4. ffmpeg-skill: located and declares `probe`.
+  Nothing starts until all pass.
+- **The seed is always fixed.** An omitted seed is drawn in the caller (`secrets.randbelow(2**32)`), so ACE-Step never picks one itself and the provenance holds the seed that ran. A result whose seed differs from the request is `INVALID_RESULT`.
+- **No download path is reachable.** Four layers, all in the worker:
+  1. Doctor and the engine check ACE-Step's own rule first: every `MAIN_MODEL_COMPONENTS` directory, the 1.7B LM included, must hold a weights file by the `_contains_model_weights` names. If one is missing, the engine is `MISSING` ("ACE-Step would download the main model") and nothing is imported. This tightens ADR-001's file list: ACE-Step demands the 1.7B LM on disk even though this skill never loads it. `acestep-download` fetches it with the main repository.
+  2. Inside the worker, ACE-Step's own `check_main_model_exists` / `check_model_exists` run on that directory before the handler is imported. `ACESTEP_CHECKPOINTS_DIR` points ACE-Step at it.
+  3. `_smart_download`, `_download_from_huggingface_internal` and `_download_from_modelscope_internal` are replaced with functions that refuse and record the attempt. `_can_access_google` returns false without a socket. Any attempt ends as `MODEL_NOT_FOUND`, even if ACE-Step swallowed the error.
+  4. `engines/netguard.py`: before any engine import, the worker makes every socket `connect` / `connect_ex`, `getaddrinfo` and `gethostbyname` to a non-loopback address fail with `NetworkBlocked`, a `ConnectionRefusedError`. This covers ModelScope, Hugging Face and anything else, whichever library tries. `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE` and `HF_DATASETS_OFFLINE` stay set.
+- **The 5 Hz LM is off.** `llm_handler=None`, `thinking=False`, `use_cot_metas` / `use_cot_caption` / `use_cot_language` false. The LMs are fine-tuned from Qwen3-0.6B / 1.7B / 4B, whose base licences are still unverified (ADR-001 follow-up). There is no flag to turn the LM on in this release. `EngineSpec.lm_status` says so and is published in the contract, doctor (`lm_note`) and every provenance (`engine.lm_status`, `parameters.lm`).
+- **Validation and placement.** The worker writes `bgm.wav` in a private `.sound-design-*` directory inside the output's own directory. ffmpeg-skill `probe` must read it as exactly one audio stream and no picture, at the engine's sample rate, lasting the requested duration ± max(0.1 s, 1 %). Anything else is `INVALID_RESULT`, and nothing is written to the output path. Then one rename puts it in place; the run directory is always removed. The WAV is ACE-Step's own and is never re-encoded.
+- **Provenance.** It records:
+  - the engine's licences and output-use statement;
+  - `lm_status`, the model, the ACE-Step version and the API commit;
+  - the caption text and SHA-256, the seed and its source;
+  - the requested and measured duration and the tolerance;
+  - the output SHA-256;
+  - the tags and the lyrics SHA-256 (not the lyrics);
+  - the requested and resolved device;
+  - the exact `GenerationParams` / `GenerationConfig` values passed;
+  - the ffmpeg-skill version.
+- **Importing ACE-Step.** Only `AceStepEngine.process`, which runs in the worker under `SOUND_DESIGN_ACESTEP_PYTHON`, loads `acestep`. It does so with `importlib.import_module`, and only after every check. The calling process never imports it: tests assert `acestep` is absent from `sys.modules` after a generation, and the step 1 scan for `import acestep` / `import torch` in the sources still passes.
+- **Tests: a fake engine, not ACE-Step.** `tests/helpers.py` writes a stdlib-only `acestep` package with the names, signatures and dataclass fields above. A field name that does not exist upstream fails with `TypeError`. It records every call and writes a stereo 48 kHz WAV that depends only on (seed, duration). Modes simulate a wrong length, an engine failure, an initialisation failure, a wrong seed, a download attempt and a hang. The unit tests run the real worker against it, with a stub ffmpeg-skill that reads WAV headers. The integration tests run the CLI against the real ffmpeg-skill `probe`.
+
+### What is verified, and what is not
+
+- **Verified here:** the adapter calls the API exactly as read; with the LM off, no LM path is taken; a fixed seed reaches the engine and comes back; the duration check, placement and clean-up work; no download function, Google probe or non-loopback socket is reachable from the worker. Same seed and duration give byte-identical files *with the deterministic fake engine*.
+- **Not verified:** bit-exact determinism and the duration accuracy of the real ACE-Step 1.5 (no install, no weights, no GPU here). `EngineSpec.deterministic` stays `false` and the tool says `deterministic: false`. The 0.1 s / 1 % tolerance is provisional (the DiT works in 25 Hz latent frames, 0.04 s) until it is measured. Speed on CPU is unverified.
+
+### Follow-ups
+
+- On a machine with ACE-Step 1.5 and its weights: generate the same (caption, duration, seed) twice per device type and compare SHA-256, and record the measured duration error. Then set `deterministic` and the tolerance from the measurement. This is roadmap step 2's "verify on the engine".
+- Verify the Qwen3-0.6B / 1.7B / 4B base-model licences. Only then add an opt-in LM stage (it needs `LLMHandler.initialize`, which this ADR did not read).
+- Step 5 (SKILL.md, CI): an engines job that runs the real ACE-Step if a runner with the weights is available.

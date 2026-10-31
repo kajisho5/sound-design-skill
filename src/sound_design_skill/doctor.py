@@ -20,8 +20,8 @@ from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
-# op -> implemented? / roadmap step; none is implemented in this release (ADR-002)
-IMPLEMENTED_OPS: Dict[str, bool] = {"bgm": False, "sfx": False, "library": False}
+# op -> implemented? / roadmap step; GENERATE_BGM since step 2 (ADR-004)
+IMPLEMENTED_OPS: Dict[str, bool] = {"bgm": True, "sfx": False, "library": False}
 OP_STEP = {"bgm": 2, "sfx": 3, "library": 4}
 NO_ENGINE_NOTE = {"sfx": "no SFX engine chosen yet: the ADR is roadmap step 3 (candidates unverified)",
                   "library": "no engine: imports user-supplied BGM / SFX with a licence field"}

@@ -7,8 +7,9 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   sound-design contract --json     the contract (alias: skill --json)
   sound-design doctor --json       engine, weights, device / GPU memory, ffmpeg-skill, ops [--offline] [--ffmpeg-skill DIR]
   sound-design engines --json      registered engines with status and licences [--offline]
+  sound-design generate-bgm --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-004)
 
-The ops (generate-bgm, generate-sfx, library-import) are declared PROPOSED and arrive in roadmap steps 2, 3 and 4."""
+generate-sfx and library-import are declared PROPOSED and arrive in roadmap steps 3 and 4."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,10 @@ from typing import Any, Dict, List, Optional
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .contract import contract
 from .doctor import doctor, engines_report
+from .engines.acestep import DEVICES
 from .errors import SoundDesignError
+from .ops import BgmRequest, generate_bgm
+from .service import DEFAULT_TIMEOUT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,7 +41,25 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("engines", help="registered engines: status, version, licences, output-use terms")
     e.add_argument("--offline", action="store_true")
     e.add_argument("--json", action="store_true")
+    b = sub.add_parser("generate-bgm", help="a music bed (BGM) from a prompt / tags, a duration and a seed (ACE-Step 1.5); WAV")
+    b.add_argument("--prompt", help="what the music is (style, instruments, mood, tempo); joined with --tags")
+    b.add_argument("--tags", type=_tag_list, default=[], help="comma-separated tags, e.g. \"ambient,piano,70 bpm\"")
+    b.add_argument("--duration", type=float, required=True, help="seconds (the engine's range; ACE-Step 10-600)")
+    b.add_argument("-o", "--output", required=True, help="output .wav (refused if it exists, unless --overwrite)")
+    b.add_argument("--seed", type=int, help="integer in [0, 2**32); drawn and recorded when omitted")
+    b.add_argument("--lyrics", help="UTF-8 lyrics file (default: instrumental)")
+    b.add_argument("--engine", help="engine id (default: acestep)")
+    b.add_argument("--device", choices=DEVICES, default="auto", help="compute device passed to the engine (default auto)")
+    b.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"engine time limit in seconds (default {DEFAULT_TIMEOUT:g})")
+    b.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
+    b.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    b.add_argument("--offline", action="store_true", help="no network (every registered engine already needs none)")
+    b.add_argument("--json", action="store_true")
     return ap
+
+
+def _tag_list(text: str) -> list:
+    return [t.strip() for t in text.split(",") if t.strip()]
 
 
 def _emit(doc: Dict[str, Any], as_json: bool) -> None:
@@ -70,6 +92,10 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  problem: {p}")
         for w in doc["warnings"]:
             print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/generate-bgm@1"):
+        out = doc["output"]
+        print(f"{out['path']}: {out['duration']:.2f}s, {out['sample_rate']} Hz, {out['channels']} ch; seed "
+              f"{doc['request']['seed']} ({doc['request']['seed_source']}); engine {doc['engine']['id']} {doc['engine']['version']}")
     elif "engines" in doc and "skill_id" not in doc:
         for eid, e in doc["engines"].items():
             print(f"{eid:17} {e['status']:12} {e.get('version') or '-':10} code {e['code_license']}; "
@@ -104,6 +130,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.cmd == "engines":
             _emit({"ok": True, "skill": {"id": SKILL_ID, "version": __version__}, "offline": bool(args.offline),
                    "engines": engines_report(offline=args.offline)}, as_json)
+            return 0
+        if args.cmd == "generate-bgm":
+            _emit(generate_bgm(BgmRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,
+                                          seed=args.seed, lyrics_path=args.lyrics, engine=args.engine, device=args.device,
+                                          timeout=args.timeout, overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
+                                          offline=args.offline)), as_json)
             return 0
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)

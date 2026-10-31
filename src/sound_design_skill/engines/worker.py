@@ -3,9 +3,10 @@
 The service starts this as a child process in its own process group, so a timeout kills a long generation for real
 and an engine crash (CUDA out of memory, a segfault in a native extension) cannot take the caller down
 (transcription-skill ADR-003, voice-enhance-skill ADR-002, dubbing-skill ADR-002). The argv is fixed; only two file
-paths in a private temporary directory vary. The Hugging Face libraries are switched offline before any engine
-import, so ACE-Step's own first-run download cannot happen from here. Errors go to the result file as structured
-JSON, never as free text on stdout.
+paths in a private temporary directory vary. Before any engine import the Hugging Face libraries are switched offline
+and every non-loopback socket connect and name lookup is refused (netguard; ADR-004), so neither Hugging Face nor
+ModelScope can be reached from here, whatever library tries. Errors go to the result file as structured JSON, never as
+free text on stdout.
 """
 from __future__ import annotations
 
@@ -20,6 +21,8 @@ OFFLINE_ENV = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_
 
 def main(argv: Optional[List[str]] = None) -> int:
     os.environ.update(OFFLINE_ENV)
+    from . import netguard
+    netguard.install()
     from ..errors import SoundDesignError
     from . import get_engine
     from .base import EngineRequest

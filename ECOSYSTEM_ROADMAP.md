@@ -13,7 +13,7 @@ Scaffold: one-line README. Engine in ecosystem.json: ACE-Step 1.5 (MIT, commerci
 
 | Owned job | Status | Note |
 |---|---|---|
-| BGM生成 | missing |  |
+| BGM生成 | experimental | GENERATE_BGM (ACE-Step 1.5), step 2 |
 | 効果音 | missing | SFX engine to choose |
 
 ## Wiring
@@ -24,7 +24,7 @@ None. Generated assets should be placed through audio-production MIX (it owns �
 
 - [x] **1. Skeleton + contract/doctor + ACE-Step worker** ([#3](https://github.com/kajisho5/sound-design-skill/pull/3), [docs/decisions.md](docs/decisions.md) ADR-001 engines, ADR-002 skeleton, ADR-003 ASCII JSON; `sound-design doctor` reports ACE-Step `OK` / `MISSING` / `INCOMPATIBLE` with an install line, the device and GPU memory; OS static checks PASS) — doctor reports device/VRAM
   - Done when: OS static checks PASS
-- [ ] **2. GENERATE_BGM op** — prompt/tags, duration, seed; provenance with engine, seed, licence
+- [x] **2. GENERATE_BGM op** ([#4](https://github.com/kajisho5/sound-design-skill/pull/4), [docs/decisions.md](docs/decisions.md) ADR-004; `sound-design generate-bgm` through ACE-Step 1.5's Python API as read from its source, DiT only (LM off until the Qwen3 base licences are verified), no Hugging Face / ModelScope path reachable, WAV validated through ffmpeg-skill probe; duration tolerance and seed determinism tested with a fake engine, the real-engine measurement is an ADR-004 follow-up) — prompt/tags, duration, seed; provenance with engine, seed, licence
   - Done when: duration within tolerance; seed determinism (verify on the engine)
 - [ ] **3. SFX engine ADR + GENERATE_SFX** — candidates to verify: Stable Audio Open, AudioLDM2 (licences)
   - Done when: ADR + tests

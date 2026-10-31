@@ -1,7 +1,7 @@
 """Running an engine: the worker subprocess with a timeout that kills its process group. A Python engine's worker
 runs under the engine's own interpreter when one is configured (SOUND_DESIGN_<ENGINE>_PYTHON, ADR-001), with this
-package's import root first on PYTHONPATH. The ops (GENERATE_BGM, GENERATE_SFX; roadmap steps 2 and 3) wrap this
-with output handling, ffmpeg-skill duration checks, validation and provenance."""
+package's import root first on PYTHONPATH. The ops (ops.py: GENERATE_BGM since step 2; GENERATE_SFX in step 3) wrap
+this with output handling, ffmpeg-skill duration checks, validation and provenance."""
 from __future__ import annotations
 
 import json
