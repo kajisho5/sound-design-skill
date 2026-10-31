@@ -459,3 +459,26 @@ A file says nothing reliable about its own licence. Tags in a WAV or MP3 are opt
   - pick: loop, trim, whole-file copy, determinism, `--file` refusals, no eligible file, output checks, the provenance, the CLI;
   - every engine entry point patched to fail; a static scan of `library.py`; contract and doctor fields; the `LICENCE_REQUIRED` CLI document on a cp1252 console with a Japanese file name (ADR-003).
 - Integration (real ffmpeg-skill and FFmpeg): WAVs written by the test under Japanese names in a Japanese-named library, plus a FLAC made by `ffmpeg-skill/cut`. Covered: refusal without a licence; import; index with loudness and one unknown file; trim to 7.5 s and loop to 10 s, both checked by the real `probe`; the same choice and SHA-256 twice; FLAC converted to WAV; a PCM WAV used as is; `--file` refused for the unknown file.
+
+## ADR-009 SKILL.md: what an agent reads, kept in step with the contract by tests; CI runs it on every platform
+
+### Context
+
+Roadmap step 5, skill side: "SKILL.md, CI". The agent side (a SkillSpec and the BGM -> MIX plan in video-production-agent) belongs to that repository and is not done here. Until now the skill had no `SKILL.md`, so an agent harness that loads Agent Skills saw nothing, although `contract --json` described every tool. CI (`.github/workflows/tests.yml`) already ran the unit tests on Linux, macOS and Windows with Python 3.9 and 3.12, `contract --json`, `skill --json` and `doctor` without engines, and an integration job against the real ffmpeg-skill with no skip allowed.
+
+### Decision
+
+- **`SKILL.md` at the repository root**, in the shape voice-enhance-skill, detection-skill, slide-sync-skill and diarization-skill use: frontmatter with only `name` (the package name, `sound-design-skill`) and `description` (what, when to use it, under 1024 characters); a task -> command table with a working example for every tool; when to use library mode versus the generators; the EzAudio confirmation (ADR-007) written as an instruction to the agent: show the user the caveat and add `--acknowledge-ezaudio-training-data` only after they agree; the library licence rules (ADR-008: declared, never cleared, unknown is never used); limits to tell the user; engines and how they are installed; the error table; what is not this skill's job. Everything it says comes from the README, the contract and ADR-001 to ADR-008; it adds no behaviour.
+- **Tests keep it true** (`tests/test_unit.py`, `SkillMdTests`, no engine and no ffmpeg needed, so they run in every CI job):
+  - the frontmatter name equals the `pyproject.toml` name, the description says "Use when" and stays under 1024 characters;
+  - the file stays under 30 KB (the budget ffmpeg-skill, imagemagick-skill and voice-enhance-skill keep);
+  - every tool in `contract --json` has an example, and `doctor`, `engines` and `contract` appear with `--json`;
+  - every flag used in an example exists in that tool's `argv` in the contract, so a renamed or removed flag fails the build;
+  - the error table equals `ERROR_TABLE` (code, exit code, retryable);
+  - every published capability id is named and is `EXPERIMENTAL`;
+  - `generate-sfx` still requires the acknowledgement flag and `SKILL.md` still tells the agent not to add it on its own.
+- **CI.** No new job: the existing matrix runs these tests. The workflow's read-only OS checkout now names the repository by its current name, `kajisho5/Velisa` (it was renamed from `kajisho5/AI-video-production-OS`; GitHub redirects, but the name is now explicit). The checkout path and `AI_VIDEO_PRODUCTION_OS_DIR` stay, since the tests read them.
+
+### What this does not do
+
+No change to the CLI, the contract or any op. The agent-side adapter and the end-to-end BGM -> MIX plan stay with video-production-agent.
