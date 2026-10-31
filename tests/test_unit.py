@@ -1,8 +1,9 @@
 """Unit tests: contract, typed errors, the engine registry and EngineSpec, availability checks (mocked package
 lookups, a fake ACE-Step install, a fake checkpoints directory and Hugging Face cache), device / GPU memory detection
 (mocked nvidia-smi and sysctl), the worker subprocess and its network guard, the ACE-Step adapter against a fake
-engine with the verified API (ADR-004), GENERATE_BGM through a stub ffmpeg-skill, doctor, provenance and the OS
-registry conformance checks. No engine, no weights, no GPU, no ffmpeg and no network are needed; nothing is
+engine with the verified API (ADR-004), GENERATE_BGM through a stub ffmpeg-skill, the EzAudio adapter against a fake
+checkout with the verified API and GENERATE_SFX (ADR-005, ADR-006), doctor, provenance and the OS registry
+conformance checks. No engine, no weights, no GPU, no ffmpeg and no network are needed; nothing is
 downloaded."""
 from __future__ import annotations
 
@@ -22,23 +23,24 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from helpers import (CHECKPOINT_FILES, OS_DIR, ROOT, env, fake_acestep_engine, fake_acestep_install, fake_checkpoints,
-                     fake_hf_snapshot, no_engines_env, run_cli)
+from helpers import (CHECKPOINT_FILES, EZAUDIO_COMMIT, OS_DIR, ROOT, env, fake_acestep_engine, fake_acestep_install,
+                     fake_checkpoints, fake_ezaudio_checkout, fake_ezaudio_engine, fake_hf_snapshot, no_engines_env, run_cli)
 
 from sound_design_skill import SKILL_ID, __version__, device
 from sound_design_skill.contract import CAPABILITY_IDS, contract
 from sound_design_skill.doctor import doctor
 from sound_design_skill.engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
-from sound_design_skill.engines import acestep, lookup, netguard, pkgprobe
+from sound_design_skill.engines import acestep, ezaudio, lookup, netguard, pkgprobe
 from sound_design_skill.engines.base import OPS, EngineRequest, EngineResult, in_range, parse_version
 from sound_design_skill.errors import ERROR_TABLE, EXIT_CODES, SoundDesignError
 from sound_design_skill.ffmpeg_skill import FLAGS_USED, FfmpegSkill, SkillInfo, parse_contract
-from sound_design_skill.ops import BGM_SCHEMA, BgmRequest, caption_from, generate_bgm, tolerance_for
+from sound_design_skill.ops import (BGM_SCHEMA, SFX_SCHEMA, BgmRequest, SfxRequest, caption_from, generate_bgm, generate_sfx,
+                                    tolerance_for)
 from sound_design_skill.procs import TIMEOUT_EXIT, run_process_group
 from sound_design_skill.provenance import build_provenance, sha256_file, sha256_text
 from sound_design_skill.service import engine_interpreter, run_engine
 
-ENGINES = ["acestep"]
+ENGINES = ["acestep", "ezaudio"]
 SRC = ROOT / "src" / "sound_design_skill"
 NVIDIA_ROW = "0, NVIDIA GeForce RTX 3060, 12288, 11800, 550.54.15\n"
 
@@ -84,11 +86,15 @@ class ContractTests(unittest.TestCase):
         for p in c["provides"]:
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
-        # GENERATE_BGM is implemented since step 2 (ADR-004); SFX (step 3) and library mode (step 4) are not
+        # GENERATE_BGM is implemented since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006); library mode (step 4) is not
         self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
-                         {"audio.bgm_generate": "EXPERIMENTAL", "audio.sfx_generate": "PROPOSED", "audio.library_import": "PROPOSED"})
+                         {"audio.bgm_generate": "EXPERIMENTAL", "audio.sfx_generate": "EXPERIMENTAL", "audio.library_import": "PROPOSED"})
         self.assertEqual({t["tool_id"]: t["implemented"] for t in c["tools"] if t["role"] in ("generation", "ingest")},
-                         {"sound-design/generate-bgm": True, "sound-design/generate-sfx": False, "sound-design/library-import": False})
+                         {"sound-design/generate-bgm": True, "sound-design/generate-sfx": True, "sound-design/library-import": False})
+        sfx = next(t for t in c["tools"] if t["tool_id"] == "sound-design/generate-sfx")
+        self.assertEqual((sfx["schema"], sfx["engine"], sfx["engines"], sfx["deterministic"]), (SFX_SCHEMA, "ezaudio", ["ezaudio"], False))
+        self.assertIn("YouTube", sfx["output_warning"])
+        self.assertIn("--device auto|cuda|cpu", " ".join(sfx["argv"]).replace("[", "").replace("]", ""))
         bgm = next(t for t in c["tools"] if t["tool_id"] == "sound-design/generate-bgm")
         self.assertEqual(bgm["schema"], BGM_SCHEMA)
         self.assertIn("off", bgm["language_model"])
@@ -105,7 +111,8 @@ class ContractTests(unittest.TestCase):
         c = contract()
         self.assertEqual(c["errors"], {k: {"exit_code": e, "retryable": r} for k, (e, r) in ERROR_TABLE.items()})
         self.assertEqual(sorted(c["engines"]["registered"]), engine_ids())
-        self.assertEqual(c["engines"]["default"], {"bgm": "acestep", "sfx": None})
+        self.assertEqual(c["engines"]["default"], {"bgm": "acestep", "sfx": "ezaudio"})
+        self.assertIn("ADR-005", c["engines"]["selection_adr"])
         ff = next(d for d in c["dependencies"] if d["id"] == "ffmpeg-skill")
         self.assertEqual(ff["flags"], {t: list(f) for t, f in FLAGS_USED.items()})
         self.assertEqual(ff["tools"], ["probe"])
@@ -150,9 +157,9 @@ class EngineSpecTests(unittest.TestCase):
     def test_registry_and_defaults(self):
         self.assertEqual(engine_ids(), ENGINES)
         self.assertEqual(set(DEFAULT_ENGINE), set(OPS))
-        self.assertEqual(DEFAULT_ENGINE, {"bgm": "acestep", "sfx": None})     # OS ADR-012; SFX engine ADR is step 3
+        self.assertEqual(DEFAULT_ENGINE, {"bgm": "acestep", "sfx": "ezaudio"})     # OS ADR-012; SFX: ADR-005
         self.assertEqual(engines_for("bgm"), ["acestep"])
-        self.assertEqual(engines_for("sfx"), [])
+        self.assertEqual(engines_for("sfx"), ["ezaudio"])
         with self.assertRaises(SoundDesignError) as e:
             get_engine("musicgen")
         self.assertEqual(e.exception.code, "ENGINE_UNAVAILABLE")
@@ -765,6 +772,372 @@ class GenerateBgmTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.out()))
 
 
+def sfx_req(**kw):
+    base = dict(op="sfx", prompt="a wooden door closes", duration=3.0, output_path="sfx.wav", seed=42)
+    base.update(kw)
+    return EngineRequest(**base)
+
+
+class EzAudioSpecTests(unittest.TestCase):
+    """ADR-005: what was verified about EzAudio, carried as data."""
+
+    def test_spec_carries_licences_output_use_training_data_and_sources(self):
+        s = get_engine("ezaudio").spec
+        self.assertEqual(s.ops, ("sfx",))
+        self.assertTrue(s.code_license.startswith("MIT") and s.weights_license.startswith("MIT"))
+        self.assertIn("flan-t5-xl Apache-2.0", s.weights_license)
+        self.assertIn("no statement", s.output_use)
+        self.assertIn("commercial use included", s.output_use)
+        self.assertIn("YouTube", s.training_data)
+        self.assertIn("YouTube", s.output_warning)
+        self.assertIn("ADR-005", s.licence_checked)
+        self.assertTrue(s.sources and all(u.startswith("https://") for u in s.sources))
+        self.assertIn("https://huggingface.co/OpenSound/EzAudio", s.sources)
+        self.assertEqual((s.duration_range, s.min_vram_gb, s.kind, s.roadmap_step), ((1.0, 10.0), None, "python", 3))
+        self.assertFalse(s.network_required or s.credit_required or s.deterministic)
+        self.assertIsNone(s.watermark)
+        self.assertIn(ezaudio.ENV_DIR, s.install)
+        self.assertIn(ezaudio.ENV_PYTHON, s.install)
+        self.assertIn(ezaudio.API_COMMIT[:8], s.version_range)
+        self.assertIsNone(get_engine("acestep").spec.output_warning)
+
+    def test_request_validation_needs_no_engine(self):
+        eng = get_engine("ezaudio")
+        eng.validate(sfx_req())
+        eng.validate(sfx_req(duration=1, seed=None))
+        eng.validate(sfx_req(duration=10.0))
+        for bad in (sfx_req(op="bgm"), sfx_req(prompt=" "), sfx_req(duration=0.5), sfx_req(duration=11), sfx_req(duration=2.5),
+                    sfx_req(duration=True), sfx_req(seed=-1), sfx_req(seed=2 ** 32)):
+            with self.assertRaises(SoundDesignError, msg=bad) as e:
+                eng.validate(bad)
+            self.assertEqual(e.exception.code, "INVALID_ARGUMENT")
+        with self.assertRaises(SoundDesignError) as e:
+            get_engine("acestep").validate(sfx_req(duration=12.0))
+        self.assertEqual(e.exception.code, "INVALID_ARGUMENT")
+
+
+class EzAudioAvailabilityTests(unittest.TestCase):
+    """OK / MISSING / INCOMPATIBLE from files and package lookups only; EzAudio is never imported."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        cm = env(**no_engines_env(self.dir))
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.mods = {m: True for m in ezaudio.MODULES}
+
+    def inspect(self, modules=None, error=None):
+        answer = pkgs({"torch": "2.5.1", "transformers": "4.46.0", "diffusers": "0.31.0"}, modules or self.mods, error)
+        with mock.patch.object(ezaudio, "python_packages", return_value=answer):
+            return get_engine("ezaudio").report()
+
+    def test_statuses(self):
+        r = self.inspect()
+        self.assertEqual((r["status"], r["missing"]), ("MISSING", "package"))
+        self.assertIn(ezaudio.ENV_DIR, r["detail"])
+        self.assertTrue(r["install"])
+        root = os.path.join(self.dir, "EzAudio")
+        os.mkdir(root)
+        with env(SOUND_DESIGN_EZAUDIO_DIR=root):
+            r = self.inspect()
+            self.assertEqual((r["status"], r["missing"]), ("MISSING", "package"))
+            self.assertIn("not an EzAudio checkout", r["detail"])
+            fake_ezaudio_checkout(root, weights=False)
+            r = self.inspect(modules=dict(self.mods, diffusers=False))
+            self.assertEqual((r["status"], r["missing"], r["version"]), ("MISSING", "package", EZAUDIO_COMMIT))
+            self.assertIn("diffusers", r["detail"])
+            r = self.inspect(error="SOUND_DESIGN_EZAUDIO_PYTHON=/x is not an executable file")
+            self.assertEqual(r["status"], "MISSING")
+            r = self.inspect()
+            self.assertEqual((r["status"], r["missing"]), ("MISSING", "model"))
+            self.assertIn("ezaudio_s3_xl.pt", r["detail"])
+            fake_checkpoints(root, ezaudio.WEIGHT_FILES)
+            r = self.inspect()
+            self.assertEqual((r["status"], r["missing"]), ("MISSING", "model"))
+            self.assertIn("google/flan-t5-xl", r["detail"])
+            fake_hf_snapshot(self.dir, ezaudio.T5_REPO, ezaudio.T5_FILES[:-1])          # one shard short
+            self.assertEqual(self.inspect()["status"], "MISSING")
+            fake_hf_snapshot(self.dir, ezaudio.T5_REPO, ezaudio.T5_FILES)
+            r = self.inspect()
+            self.assertEqual((r["status"], r["version"], r["model"], r["install"]), ("OK", EZAUDIO_COMMIT, "s3_xl", None))
+            self.assertEqual(r["packages"]["torch"], "2.5.1")
+            api = Path(root) / "api" / "ezaudio.py"
+            api.write_text(api.read_text(encoding="utf-8").replace("random_seed=None, randomize_seed=False", "seed=None"),
+                           encoding="utf-8")
+            r = self.inspect()
+            self.assertEqual(r["status"], "INCOMPATIBLE")
+            self.assertIn("randomize_seed", r["detail"])
+
+    def test_checkout_commit_reads_packed_refs_and_detached_heads(self):
+        root = Path(fake_ezaudio_checkout(os.path.join(self.dir, "EzAudio")))
+        self.assertEqual(ezaudio.checkout_commit(root), EZAUDIO_COMMIT)
+        (root / ".git" / "refs" / "heads" / "main").unlink()
+        (root / ".git" / "packed-refs").write_text(f"# pack-refs\n{'a' * 40} refs/heads/main\n", encoding="utf-8")
+        self.assertEqual(ezaudio.checkout_commit(root), "a" * 40)
+        (root / ".git" / "HEAD").write_text("b" * 40 + "\n", encoding="utf-8")
+        self.assertEqual(ezaudio.checkout_commit(root), "b" * 40)
+        self.assertIsNone(ezaudio.checkout_commit(Path(self.dir) / "nowhere"))
+
+    def test_real_lookup_finds_the_fake_modules_without_importing_them(self):
+        with fake_ezaudio_engine(self.dir):
+            r = get_engine("ezaudio").report()
+        self.assertEqual(r["status"], "OK", r.get("detail"))
+        self.assertNotIn("api.ezaudio", sys.modules)
+
+
+class EzAudioEngineTests(unittest.TestCase):
+    """EzAudioEngine.process in the real worker subprocess, against the fake checkout (tests/helpers.py) that has the
+    API surface ADR-006 read and returns deterministic audio for a seed and a length."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        cm = env(**no_engines_env(self.dir))
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        engine_cm = fake_ezaudio_engine(self.dir)
+        self.fake = engine_cm.__enter__()
+        self.addCleanup(engine_cm.__exit__, None, None, None)
+        self.n = 0
+
+    def run_engine(self, **kw):
+        self.n += 1
+        run_dir = os.path.join(self.dir, f"run{self.n}")
+        os.mkdir(run_dir)
+        kw.setdefault("output_path", os.path.join(run_dir, "sfx.wav"))
+        return run_engine("ezaudio", sfx_req(**kw), 60, run_dir)
+
+    def events(self, name):
+        return [c for c in self.fake["calls"]() if c["event"] == name]
+
+    def test_generates_through_the_verified_api(self):
+        res = self.run_engine(seed=7, prompt="a wooden door closes", duration=3.0)
+        self.assertTrue(os.path.isfile(res.output_path))
+        self.assertEqual((res.seed, res.sample_rate, res.model, res.engine_version), (7, 24000, "s3_xl", EZAUDIO_COMMIT))
+        with wave.open(res.output_path) as w:
+            self.assertEqual((w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()), (24000, 1, 2, 72000))
+        init = self.events("init")
+        self.assertEqual(len(init), 1)
+        root = Path(self.fake["dir"]).resolve()
+        self.assertEqual((init[0]["model_name"], init[0]["device"], init[0]["hf_offline"]), ("s3_xl", "cpu", "1"))  # auto -> cpu
+        self.assertEqual((Path(init[0]["ckpt_path"]), Path(init[0]["vae_path"])),
+                         (root / "ckpts" / "s3" / "ezaudio_s3_xl.pt", root / "ckpts" / "vae" / "1m.pt"))
+        self.assertEqual(Path(init[0]["cwd"]).resolve(), root)               # the model config is opened relative to it
+        gen = self.events("generate_audio")
+        self.assertEqual(len(gen), 1)
+        g = gen[0]
+        self.assertEqual((g["text"], g["length"], g["random_seed"], g["randomize_seed"]), ("a wooden door closes", 3, 7, False))
+        self.assertEqual((g["guidance_scale"], g["guidance_rescale"], g["ddim_steps"], g["eta"]), (5, 0.75, 100, 1))
+        self.assertEqual(res.extra["generate_audio"], dict(ezaudio.GENERATION_DEFAULTS, length=3, random_seed=7, randomize_seed=False))
+        self.assertIn(EZAUDIO_COMMIT, res.extra["api"])
+        self.assertEqual((res.extra["device"], res.extra["requested_device"]), ("cpu", "auto"))
+        self.assertEqual(self.events("download"), [])
+        self.assertNotIn("api.ezaudio", sys.modules)                         # imported in the worker only
+
+    def test_same_seed_and_length_give_the_same_file(self):
+        digest = lambda r: hashlib.sha256(Path(r.output_path).read_bytes()).hexdigest()   # noqa: E731
+        a, b, c = self.run_engine(seed=42), self.run_engine(seed=42), self.run_engine(seed=43)
+        self.assertEqual(digest(a), digest(b))
+        self.assertNotEqual(digest(a), digest(c))
+
+    def test_an_omitted_seed_is_drawn_and_reported(self):
+        res = self.run_engine(seed=None)
+        self.assertEqual(self.events("generate_audio")[0]["random_seed"], res.seed)
+
+    def test_a_download_attempt_is_refused_and_never_reaches_the_network(self):
+        self.fake["set_mode"]("force_download")
+        with self.assertRaises(SoundDesignError) as e:
+            self.run_engine()
+        self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")
+        self.assertIn("download_ckpt", e.exception.message)
+        self.assertEqual(self.events("download"), [])                       # EzAudio's own download_ckpt never ran
+        self.assertEqual(self.events("generate_audio"), [])
+
+    def test_a_network_attempt_while_loading_is_refused_by_the_guard(self):
+        self.fake["set_mode"]("t5_network")
+        with self.assertRaises(SoundDesignError) as e:
+            self.run_engine()
+        self.assertEqual(e.exception.code, "ENGINE_FAILED")
+        self.assertIn("NetworkBlocked", e.exception.message)
+        self.assertEqual(self.events("generate_audio"), [])
+
+    def test_missing_weights_are_refused_before_import(self):
+        os.remove(os.path.join(self.fake["dir"], "ckpts", "vae", "1m.pt"))
+        with self.assertRaises(SoundDesignError) as e:
+            self.run_engine()
+        self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")
+        self.assertIn("1m.pt", e.exception.message)
+        self.assertEqual(self.fake["calls"](), [])
+
+    def test_engine_failures_are_structured(self):
+        for mode, code, text in (("init_fail", "ENGINE_FAILED", "CUDA out of memory"), ("fail", "ENGINE_FAILED", "diffusion failed"),
+                                 ("wrong_rate", "INVALID_RESULT", "16000")):
+            self.fake["set_mode"](mode)
+            with self.assertRaises(SoundDesignError, msg=mode) as e:
+                self.run_engine(seed=5)
+            self.assertEqual(e.exception.code, code, mode)
+            self.assertIn(text, e.exception.message, mode)
+
+    def test_arguments_the_engine_cannot_take_are_refused_in_the_worker(self):
+        for kw in ({"prompt": "x" * 513}, {"lyrics": "la la"}, {"params": {"device": "mps"}}, {"duration": 2.5}, {"duration": 11.0}):
+            with self.assertRaises(SoundDesignError, msg=kw) as e:
+                self.run_engine(**kw)
+            self.assertEqual(e.exception.code, "INVALID_ARGUMENT", kw)
+        self.assertEqual(self.fake["calls"](), [])
+
+
+class GenerateSfxTests(unittest.TestCase):
+    """GENERATE_SFX end to end in-process: checks, the real worker with the fake EzAudio, validation through a stub
+    ffmpeg-skill, provenance and placement (ADR-006)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.out_dir = os.path.join(self.dir, "out")
+        os.mkdir(self.out_dir)
+        cm = env(**no_engines_env(self.dir))
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        engine_cm = fake_ezaudio_engine(self.dir)
+        self.fake = engine_cm.__enter__()
+        self.addCleanup(engine_cm.__exit__, None, None, None)
+        self.skill = StubFfmpegSkill()
+
+    def out(self, name="door.wav"):
+        return os.path.join(self.out_dir, name)
+
+    def sfx(self, **kw):
+        kw.setdefault("output_path", self.out())
+        kw.setdefault("duration", 2.0)
+        kw.setdefault("prompt", "a wooden door closes")
+        return generate_sfx(SfxRequest(**kw), skill=self.skill)
+
+    def assert_clean(self):
+        self.assertEqual([n for n in os.listdir(self.out_dir) if n.startswith(".sound-design-")], [])
+
+    def test_effect_with_provenance(self):
+        doc = self.sfx(tags=["indoor", " close "], seed=99)
+        self.assertEqual((doc["schema"], doc["ok"], doc["op"], doc["capability"]), (SFX_SCHEMA, True, "sfx", "audio.sfx_generate"))
+        self.assertEqual(doc["output"]["path"], self.out())
+        self.assertAlmostEqual(doc["output"]["duration"], 2.0, places=3)
+        self.assertEqual((doc["output"]["sample_rate"], doc["output"]["channels"]), (24000, 1))
+        self.assertEqual(doc["request"], {"prompt": "a wooden door closes, indoor, close", "duration": 2.0, "seed": 99,
+                                          "seed_source": "given"})
+        p = doc["provenance"]
+        self.assertEqual((p["op"], p["seed"], p["prompt"]["text"]), ("sfx", 99, "a wooden door closes, indoor, close"))
+        self.assertEqual(p["output"]["sha256"], sha256_file(self.out()))
+        self.assertEqual(p["output"]["sha256"], doc["output"]["sha256"])
+        self.assertEqual(p["duration"]["tolerance"], tolerance_for(2.0))
+        e = p["engine"]
+        self.assertEqual((e["id"], e["version"], e["model"]), ("ezaudio", EZAUDIO_COMMIT, "s3_xl"))
+        self.assertTrue(e["code_license"].startswith("MIT") and e["weights_license"].startswith("MIT"))
+        self.assertIn("YouTube", e["training_data"])
+        self.assertEqual(e["output_warning"], ezaudio.OUTPUT_WARNING)
+        self.assertEqual(doc["engine"]["training_data"], e["training_data"])
+        self.assertNotIn("interpreter", e)
+        self.assertEqual(p["parameters"]["tags"], ["indoor", "close"])
+        self.assertEqual(p["parameters"]["generate_audio"]["random_seed"], 99)
+        self.assertEqual(p["parameters"]["text_encoder"], "google/flan-t5-xl")
+        self.assertEqual(p["ffmpeg_skill"]["version"], "2.23.0")
+        self.assertFalse(p["network"])
+        self.assertEqual(doc["warnings"], [ezaudio.OUTPUT_WARNING])
+        self.assertEqual(doc["handoff"]["to"], "audio-production-skill MIX")
+        self.assertTrue(self.skill.probed[-1].endswith("sfx.wav"))           # probed in the run dir, before placement
+        self.assert_clean()
+        self.assertNotIn("api.ezaudio", sys.modules)
+        json.dumps(doc, ensure_ascii=True, allow_nan=False)
+
+    def test_seed_is_drawn_when_omitted_and_the_same_seed_repeats_the_file(self):
+        first = self.sfx(output_path=self.out("a.wav"))
+        self.assertEqual(first["request"]["seed_source"], "drawn")
+        self.assertTrue(0 <= first["provenance"]["seed"] < 2 ** 32)
+        again = self.sfx(output_path=self.out("b.wav"), seed=first["provenance"]["seed"])
+        self.assertEqual(again["output"]["sha256"], first["output"]["sha256"])
+
+    def test_a_wrong_duration_is_invalid_result_and_nothing_is_written(self):
+        self.fake["set_mode"]("short")
+        with self.assertRaises(SoundDesignError) as e:
+            self.sfx()
+        self.assertEqual(e.exception.code, "INVALID_RESULT")
+        self.assertIn("duration", e.exception.message)
+        self.assertFalse(os.path.exists(self.out()))
+        self.assert_clean()
+
+    def test_checks_run_before_any_work(self):
+        Path(self.out("exists.wav")).write_bytes(b"x")
+        cases = [
+            ({"output_path": self.out("exists.wav")}, "OUTPUT_EXISTS"),
+            ({"output_path": self.out("door.flac")}, "INVALID_ARGUMENT"),
+            ({"output_path": self.out_dir}, "INVALID_ARGUMENT"),
+            ({"output_path": os.path.join(self.dir, "no-such-dir", "door.wav")}, "INVALID_ARGUMENT"),
+            ({"prompt": "  ", "tags": []}, "INVALID_ARGUMENT"),
+            ({"prompt": "x" * 600}, "INVALID_ARGUMENT"),
+            ({"tags": "door"}, "INVALID_ARGUMENT"),
+            ({"seed": -1}, "INVALID_ARGUMENT"),
+            ({"seed": True}, "INVALID_ARGUMENT"),
+            ({"duration": 0.5}, "INVALID_ARGUMENT"),
+            ({"duration": 2.5}, "INVALID_ARGUMENT"),
+            ({"duration": 11.0}, "INVALID_ARGUMENT"),
+            ({"device": "mps"}, "INVALID_ARGUMENT"),
+            ({"timeout": 0}, "INVALID_ARGUMENT"),
+            ({"engine": "acestep"}, "INVALID_ARGUMENT"),           # a BGM engine does not do SFX
+            ({"engine": "audioldm2"}, "ENGINE_UNAVAILABLE"),
+        ]
+        for kw, code in cases:
+            with self.assertRaises(SoundDesignError, msg=kw) as e:
+                self.sfx(**kw)
+            self.assertEqual(e.exception.code, code, kw)
+        self.assertEqual(self.fake["calls"](), [])
+        self.assertEqual(self.skill.probed, [])
+        self.assert_clean()
+
+    def test_engine_is_checked_before_ffmpeg_skill(self):
+        os.remove(os.path.join(self.fake["dir"], "ckpts", "s3", "ezaudio_s3_xl.pt"))
+        with self.assertRaises(SoundDesignError) as e:
+            generate_sfx(SfxRequest(output_path=self.out(), duration=2.0, prompt="x",
+                                    ffmpeg_skill_dir=os.path.join(self.dir, "no-ffmpeg-skill")))
+        self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")     # not FFMPEG_SKILL_UNAVAILABLE
+        self.assertEqual(self.fake["calls"](), [])
+
+    def test_overwrite_and_a_prompt_the_encoder_truncates(self):
+        Path(self.out()).write_bytes(b"old")
+        doc = self.sfx(overwrite=True, prompt=" ".join(["tap"] * 101), seed=3)
+        self.assertNotEqual(Path(self.out()).read_bytes(), b"old")
+        self.assertEqual(len(doc["warnings"]), 2)
+        self.assertIn("100 tokens", doc["warnings"][1])
+
+    def test_timeout_kills_the_engine_and_cleans_up(self):
+        self.fake["set_mode"]("sleep")
+        t0 = time.time()
+        with self.assertRaises(SoundDesignError) as e:
+            self.sfx(timeout=3)
+        self.assertEqual((e.exception.code, e.exception.retryable), ("ENGINE_TIMEOUT", True))
+        self.assertLess(time.time() - t0, 30)
+        self.assertFalse(os.path.exists(self.out()))
+        self.assert_clean()
+
+    def test_cli_reports_a_missing_engine_as_json(self):
+        with env(SOUND_DESIGN_EZAUDIO_DIR=os.path.join(self.dir, "empty")):
+            rc, doc = run_cli("generate-sfx", "--prompt", "door slam", "--tags", "wood,indoor", "--duration", "2",
+                              "-o", self.out(), "--seed", "9", "--json")
+        self.assertEqual((rc, doc["ok"], doc["error"]["code"]), (3, False, "ENGINE_UNAVAILABLE"))
+        self.assertIn(ezaudio.ENV_DIR, doc["error"]["details"]["install"])
+        self.assertFalse(os.path.exists(self.out()))
+
+    def test_cli_human_output_carries_the_warning(self):
+        buf, skill = io.StringIO(), self.skill
+        with mock.patch("sound_design_skill.ops.FfmpegSkill.locate", return_value=skill), mock.patch("sys.stdout", buf):
+            from sound_design_skill import cli
+            rc = cli.main(["generate-sfx", "--prompt", "door slam", "--duration", "2", "-o", self.out(), "--seed", "4"])
+        self.assertEqual(rc, 0)
+        self.assertIn("24000 Hz, 1 ch; seed 4 (given); engine ezaudio", buf.getvalue())
+        self.assertIn("warning: EzAudio was trained on YouTube audio", buf.getvalue())
+
+
 class FfmpegSkillContractTests(unittest.TestCase):
     def doc(self, drop=None):
         tools = []
@@ -810,8 +1183,12 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual((d["status"], d["ok"]), ("fail", False))
         self.assertEqual(set(d["checks"]["operations"]), {"bgm", "sfx", "library"})
         self.assertFalse(any(o["ready"] for o in d["checks"]["operations"].values()))
-        self.assertIsNone(d["checks"]["operations"]["sfx"]["engine"])
-        self.assertIn("step 3", d["checks"]["operations"]["sfx"]["note"])
+        sfx = d["checks"]["operations"]["sfx"]
+        self.assertEqual((sfx["implemented"], sfx["engine"], sfx["engine_status"], sfx["roadmap_step"]), (True, "ezaudio", "MISSING", 3))
+        self.assertNotIn("note", sfx)
+        ez = d["checks"]["engines"]["ezaudio"]
+        self.assertEqual(ez["status"], "MISSING")
+        self.assertIn("SOUND_DESIGN_EZAUDIO_DIR", ez["install"])
         self.assertEqual((rc, cli_doc["status"], cli_doc["offline"]), (1, "fail", True))
         self.assertEqual(cli_doc["checks"]["device"]["vram_total_mb"], 12288)
 

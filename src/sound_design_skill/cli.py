@@ -8,8 +8,9 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   sound-design doctor --json       engine, weights, device / GPU memory, ffmpeg-skill, ops [--offline] [--ffmpeg-skill DIR]
   sound-design engines --json      registered engines with status and licences [--offline]
   sound-design generate-bgm --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-004)
+  sound-design generate-sfx --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-006)
 
-generate-sfx and library-import are declared PROPOSED and arrive in roadmap steps 3 and 4."""
+library-import is declared PROPOSED and arrives in roadmap step 4."""
 from __future__ import annotations
 
 import argparse
@@ -22,7 +23,7 @@ from .contract import contract
 from .doctor import doctor, engines_report
 from .engines.acestep import DEVICES
 from .errors import SoundDesignError
-from .ops import BgmRequest, generate_bgm
+from .ops import SFX_DEVICES, SFX_TIMEOUT, BgmRequest, SfxRequest, generate_bgm, generate_sfx
 from .service import DEFAULT_TIMEOUT
 
 
@@ -55,6 +56,19 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     b.add_argument("--offline", action="store_true", help="no network (every registered engine already needs none)")
     b.add_argument("--json", action="store_true")
+    s = sub.add_parser("generate-sfx", help="a sound effect from a prompt / tags, a duration and a seed (EzAudio); WAV")
+    s.add_argument("--prompt", help="what the effect is (source, action, space); joined with --tags")
+    s.add_argument("--tags", type=_tag_list, default=[], help="comma-separated tags, e.g. \"door,wooden,close\"")
+    s.add_argument("--duration", type=float, required=True, help="whole seconds (the engine's range; EzAudio 1-10)")
+    s.add_argument("-o", "--output", required=True, help="output .wav (refused if it exists, unless --overwrite)")
+    s.add_argument("--seed", type=int, help="integer in [0, 2**32); drawn and recorded when omitted")
+    s.add_argument("--engine", help="engine id (default: ezaudio)")
+    s.add_argument("--device", choices=SFX_DEVICES, default="auto", help="compute device passed to the engine (default auto)")
+    s.add_argument("--timeout", type=float, default=SFX_TIMEOUT, help=f"engine time limit in seconds (default {SFX_TIMEOUT:g})")
+    s.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
+    s.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    s.add_argument("--offline", action="store_true", help="no network (every registered engine already needs none)")
+    s.add_argument("--json", action="store_true")
     return ap
 
 
@@ -92,10 +106,12 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  problem: {p}")
         for w in doc["warnings"]:
             print(f"  warning: {w}")
-    elif doc.get("schema", "").endswith("/generate-bgm@1"):
+    elif doc.get("schema", "").endswith(("/generate-bgm@1", "/generate-sfx@1")):
         out = doc["output"]
         print(f"{out['path']}: {out['duration']:.2f}s, {out['sample_rate']} Hz, {out['channels']} ch; seed "
               f"{doc['request']['seed']} ({doc['request']['seed_source']}); engine {doc['engine']['id']} {doc['engine']['version']}")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
     elif "engines" in doc and "skill_id" not in doc:
         for eid, e in doc["engines"].items():
             print(f"{eid:17} {e['status']:12} {e.get('version') or '-':10} code {e['code_license']}; "
@@ -135,6 +151,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(generate_bgm(BgmRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,
                                           seed=args.seed, lyrics_path=args.lyrics, engine=args.engine, device=args.device,
                                           timeout=args.timeout, overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
+                                          offline=args.offline)), as_json)
+            return 0
+        if args.cmd == "generate-sfx":
+            _emit(generate_sfx(SfxRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,
+                                          seed=args.seed, engine=args.engine, device=args.device, timeout=args.timeout,
+                                          overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
                                           offline=args.offline)), as_json)
             return 0
     except SoundDesignError as e:

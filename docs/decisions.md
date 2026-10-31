@@ -47,7 +47,7 @@ The skill makes music beds and effects for conference and event video (openings,
 
 ### Decision
 
-- **Registry.** The engine registry holds one engine, `acestep` (ACE-Step 1.5), the default for GENERATE_BGM. No SFX engine is registered: `DEFAULT_ENGINE["sfx"]` is `null` until the step 3 ADR.
+- **Registry.** The engine registry holds one engine, `acestep` (ACE-Step 1.5), the default for GENERATE_BGM. No SFX engine is registered: `DEFAULT_ENGINE["sfx"]` is `null` until the step 3 ADR. (Step 3: [ADR-005](#adr-005-sfx-engine-ezaudio-mit-code-and-weights-the-other-candidates-are-non-commercial-or-revenue-capped) registers `ezaudio` for SFX.)
 - **Default model.** The 2B turbo DiT (`acestep-v15-turbo`) with its VAE and text encoder, which fits the documented < 4 GB path. The 5 Hz LM planner is optional; doctor reports which LMs are present and falls back to ACE-Step's own DiT-only mode when none is. XL models are allowed later only with a GPU that meets their documented minimum.
 - **EngineSpec.** Code licence, weights licence (with the Apache-2.0 text encoder), output-use statement, training-data claim, credit, watermark, duration range, devices, minimum VRAM, isolation, supported version range (`>=1.5.0 <1.6.0`), install line, sources and the date of this check. `contract --json` and `engines --json` publish it; every file's provenance copies the licence and output-use fields.
 - **Isolation.** ACE-Step runs in the worker subprocess under its own interpreter, `SOUND_DESIGN_ACESTEP_PYTHON` (normally `<checkout>/.venv/bin/python`). It is never a pip extra of this package, and this package never imports it, torch or transformers.
@@ -180,3 +180,163 @@ Read only, from ace-step/ACE-Step-1.5 at commit `ca1e85fe9430179831e6bc6be790c33
 - On a machine with ACE-Step 1.5 and its weights: generate the same (caption, duration, seed) twice per device type and compare SHA-256, and record the measured duration error. Then set `deterministic` and the tolerance from the measurement. This is roadmap step 2's "verify on the engine".
 - Verify the Qwen3-0.6B / 1.7B / 4B base-model licences. Only then add an opt-in LM stage (it needs `LLMHandler.initialize`, which this ADR did not read).
 - Step 5 (SKILL.md, CI): an engines job that runs the real ACE-Step if a runner with the weights is available.
+
+## ADR-005 SFX engine: EzAudio (MIT code and weights); the other candidates are non-commercial or revenue-capped
+
+### Context
+
+Roadmap step 3: choose the sound-effects engine. ADR-001 named Stable Audio Open and AudioLDM2 as candidates and left every SFX candidate unverified. This ADR checks them, and the other open text-to-audio models someone would propose, against ADR-001's requirements: code *and* weights allow commercial use of the generated audio; it runs locally and offline; consumer hardware; isolated in a worker; obligations recorded as data. Non-commercial (NC) licences, revenue-capped licences, licences or components we could not read, and weights with no stated licence are not chosen.
+
+Checked 2026-10-31 from primary sources: the licence files in the code repositories, the Hugging Face model cards and their `license` metadata (read through the Hugging Face API, `https://huggingface.co/api/models/<id>`), and the licence files in the model repositories. Code and weights are judged separately, and so is every component loaded at inference (VAE, vocoder, text encoder).
+
+### Candidates
+
+| Candidate | Code licence (source) | Weights licence (source) | Output use / other components | Verdict |
+|---|---|---|---|---|
+| **EzAudio** (`OpenSound/EzAudio`, `s3_xl`) | **MIT**, "Copyright (c) 2025 Jiarui Hai" (haidog-yaqub/EzAudio `LICENSE`) | **MIT** (HF card metadata `license: mit`; DiT checkpoints and the waveform VAE are in the same repository) | Text encoder `google/flan-t5-xl` **Apache-2.0** (HF card). No statement on the output anywhere; MIT does not restrict it. Training data: AudioSet, VGGSound, AudioCaps (paper), i.e. YouTube clips | **Chosen** (see Findings) |
+| Stable Audio Open 1.0 (`stabilityai/stable-audio-open-1.0`) | MIT (Stability-AI/stable-audio-tools `LICENSE`) | **Stability AI Community License** (`LICENSE.md`, "Last Updated: July 5, 2024"). The model page is gated, but the file is served without login, so it was read this time (ADR-001 could not) | §III: commercial use requires registration, and every licence terminates once the licensee and its affiliates exceed **USD 1,000,000** annual revenue; §IV(a) "Powered by Stability AI"; §IV(b) the output may not be used to create or improve a foundation model; revocable. §IV(c)(iii): the user owns the output | **Rejected**: revenue-capped, revocable commercial licence (ADR-001 rejects revenue caps) |
+| Stable Audio Open Small (`stabilityai/stable-audio-open-small`) | MIT (stable-audio-tools) | Stability AI Community License (`LICENSE`, the same July 5, 2024 text, USD 1,000,000 cap) | as above | **Rejected**: revenue-capped |
+| AudioLDM2 (`cvssp/audioldm2`, `audioldm2-large`, `audioldm2-music`) | **CC BY-NC-SA 4.0** (haoheliu/AudioLDM2 `LICENSE`) | **CC BY-NC-SA 4.0** (HF card metadata, all three) | n/a | **Rejected**: non-commercial code and weights |
+| AudioLDM 1 (`cvssp/audioldm-s-full-v2`, `audioldm-l-full`) | not checked | **CC BY-NC-SA 4.0** (HF card metadata) | n/a | **Rejected**: non-commercial weights |
+| AudioGen (`facebook/audiogen-medium`) | MIT (audiocraft `LICENSE`, ADR-001) | **CC BY-NC 4.0** (HF card metadata) | n/a | **Rejected**: non-commercial weights |
+| Tango / Tango 2 (`declare-lab/tango`, `tango2`) | not checked | **CC BY-NC-SA 4.0** (HF card metadata) | n/a | **Rejected**: non-commercial weights |
+| TangoFlux (`declare-lab/TangoFlux`) | declare-lab/TangoFlux `LICENSE.md`: "created for **non-commercial, research-only** purposes", subject to the Stability AI Community License | no `license` in the HF card metadata | n/a | **Rejected**: non-commercial |
+| MMAudio (`hkchengrex/MMAudio`) | MIT, "Copyright (c) 2024 Sony Research Inc." (hkchengrex/MMAudio `LICENSE`) | **CC BY-NC 4.0** (HF card metadata) | n/a | **Rejected**: non-commercial weights |
+| ThinkSound (`FunAudioLLM/ThinkSound`) | README "License": Apache 2.0, but "The code, models, and dataset are **for research and educational purposes only**. **Commercial use is NOT permitted.**" (FunAudioLLM/ThinkSound `README.md`, master); no `LICENSE` file at `main` or `master` | HF card metadata says `apache-2.0`, contradicted by the README | Ships a VAE fine-tuned from Stable Audio Open under the Stability AI Community License ("Commercial use and redistribution require prior permission from Stability AI"). Video-to-audio first | **Rejected**: commercial use excluded by the authors |
+| AudioX (`HKUSTAudio/AudioX`) | not checked | **CC BY-NC 4.0** (HF card metadata) | n/a | **Rejected**: non-commercial weights |
+| Auffusion (`auffusion/auffusion`, `auffusion-full-no-adapter`) | not checked | **CC BY-NC-SA 4.0** (HF card metadata) | n/a | **Rejected**: non-commercial weights |
+| SoundCTM (`Sony/soundctm`) | MIT, "Copyright (c) 2024 Sony Research Inc." (sony/soundctm `LICENSE`) | SoundCTM weights **CC BY 4.0** (HF card) | Inference also loads `ckpt/audioldm-s-full.ckpt` "for VAE's decoder+Vocoder" (sony/soundctm `README.md`), which upstream is AudioLDM-s-full under **CC BY-NC-SA 4.0**; the student is distilled from TANGO (CC BY-NC-SA 4.0) | **Rejected**: a non-commercial component is required at inference |
+| HunyuanVideo-Foley (`tencent/HunyuanVideo-Foley`) | not checked | "Tencent Hunyuan Community License" (HF card metadata `license: other`); the licence text was not read | Video-to-audio, not text-to-SFX | **Unverified**, not chosen |
+| GenAU, AudioLCM, Make-An-Audio 2, Kling-Foley | not checked | no public model found at the Hugging Face ids tried (`snap-research/GenAU`, `ByteDance/AudioLCM`, `AIGC-Audio/Make-An-Audio-2`, `kuaishou/Kling-Foley`) | n/a | **Unverified**, not chosen |
+
+### Findings on EzAudio
+
+- **Licences.** Code MIT; DiT and VAE weights MIT on the model card; text encoder Apache-2.0. All three allow commercial use. No credit is required beyond keeping the licence notices with redistributed copies, and this skill redistributes nothing. No watermark is documented: **none known** (not tested on output).
+- **Output use.** Neither the licences, the model card nor the README say anything about the generated audio. None of the licences restricts it. ACE-Step's card states commercial use outright (ADR-001); EzAudio's does not. The `EngineSpec.output_use` says exactly this.
+- **Training data: a recorded risk.** The paper (arXiv 2409.10819, §I-II) trains the DiT on AudioSet, VGGSound and AudioCaps and the waveform VAE on AudioSet. These datasets are lists of YouTube clips; the audio belongs to the uploaders, who did not license it for training. No licence can grant rights its licensor does not hold. This is not verified either way. It is published as `EngineSpec.training_data` and as `EngineSpec.output_warning`, which every GENERATE_SFX result carries in `warnings` and every provenance in `engine.output_warning`. The ProductionReceipt therefore shows it.
+- **Authorship.** The paper notes the work was done during an internship at Tencent AI Lab. The weights are published under MIT by the `OpenSound` organisation; that is the licence this ADR relies on.
+- **Hardware.** Not documented. EzAudio-XL is a 28-layer, 1152-wide DiT plus the Flan-T5-XL encoder, loaded in fp32 by `api/ezaudio.py`. `min_vram_gb` stays `null` (**unverified**). It runs on `cuda` or `cpu` (the API passes `device` to torch); MPS is not claimed.
+- **Install.** A git checkout with `requirements.txt` (unpinned torch, diffusers, transformers, librosa and others). There is no distribution and no version number. Weights from `OpenSound/EzAudio` go into the checkout's `ckpts/`; Flan-T5-XL goes into the Hugging Face cache.
+- **Downloads.** `EzAudio.__init__` downloads a missing checkpoint itself (`download_ckpt`, urllib's `urlretrieve` from huggingface.co). `T5EncoderModel.from_pretrained("google/flan-t5-xl")` would fetch the encoder when online. ADR-006 makes neither reachable.
+
+### Decision
+
+- **Registry.** `ezaudio` is registered for `sfx` and is `DEFAULT_ENGINE["sfx"]`. ACE-Step stays BGM only.
+- **EngineSpec.** It records:
+  - the code and weights licences, with the Apache-2.0 text encoder;
+  - the output-use finding (no statement, no restriction);
+  - the training-data risk and the `output_warning`;
+  - credit (none) and watermark (none known);
+  - duration 1-10 s and devices `cuda` / `cpu`, with `min_vram_gb` unknown;
+  - the isolation, install line and sources.
+
+  `version_range` is a capability rule, because EzAudio has no version: a checkout whose `api/ezaudio.py` still has the API ADR-006 read. A checkout without it is `INCOMPATIBLE`.
+- **Availability.** Doctor checks every file and never imports anything:
+  - `OK` needs all of these: `SOUND_DESIGN_EZAUDIO_DIR` points at a checkout (`api/ezaudio.py`, `src/inference.py`, `ckpts/ezaudio-xl.yml`, `ckpts/vae/config.json`); that API is present; EzAudio's modules (`torch`, `transformers`, `diffusers`, `soundfile`, `yaml`, `librosa`, `einops`) can be found under `SOUND_DESIGN_EZAUDIO_PYTHON` (else this Python); `ckpts/s3/ezaudio_s3_xl.pt` and `ckpts/vae/1m.pt` exist; and a Hugging Face cache snapshot of `google/flan-t5-xl` holds `config.json`, `spiece.model` and both safetensors shards with their index.
+  - Otherwise the engine is `MISSING` with the install line.
+- **Provenance.** `training_data` and `output_warning` join the engine fields copied into every provenance (BGM too, where `output_warning` is `null`).
+- **Isolation.** As ACE-Step: the worker runs under EzAudio's own interpreter. This package never imports EzAudio, torch, diffusers or transformers.
+
+### ecosystem.json
+
+To be applied in AI-video-production-OS, which this repository does not edit (replacing the SFX placeholder of ADR-001):
+
+```json
+{"name": "EzAudio", "note": "SFX / MIT(コード・重み) / テキストエンコーダ flan-t5-xl は Apache-2.0 / 生成物の利用に関する記述なし(ライセンス上の制限なし) / 学習データは AudioSet・VGGSound・AudioCaps (YouTube 音源、権利者の許諾なし: リスクとして記録) / 1-10 秒 / 別venv"}
+```
+
+### Follow-ups
+
+- Re-check if EzAudio's card or README ever adds output terms, or if `OpenSound/EzAudio` changes licence.
+- An engine trained on licensed or public-domain effects only would remove the training-data risk. None of the candidates above documents that and has a commercial licence.
+- Read the Tencent Hunyuan Community License if a video-to-audio (Foley) op is ever wanted.
+
+### Sources
+
+- EzAudio: [haidog-yaqub/EzAudio](https://github.com/haidog-yaqub/EzAudio), [LICENSE (MIT)](https://github.com/haidog-yaqub/EzAudio/blob/main/LICENSE), [HF OpenSound/EzAudio (license: mit; files)](https://huggingface.co/OpenSound/EzAudio), [HF google/flan-t5-xl (apache-2.0)](https://huggingface.co/google/flan-t5-xl), [arXiv 2409.10819 (training data)](https://arxiv.org/abs/2409.10819)
+- Stable Audio Open: [HF stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0), [LICENSE.md (Stability AI Community License)](https://huggingface.co/stabilityai/stable-audio-open-1.0/blob/main/LICENSE.md), [HF stabilityai/stable-audio-open-small](https://huggingface.co/stabilityai/stable-audio-open-small), [LICENSE](https://huggingface.co/stabilityai/stable-audio-open-small/blob/main/LICENSE), [stable-audio-tools LICENSE (MIT)](https://github.com/Stability-AI/stable-audio-tools/blob/main/LICENSE)
+- AudioLDM / AudioLDM2: [haoheliu/AudioLDM2 LICENSE (CC BY-NC-SA 4.0)](https://github.com/haoheliu/AudioLDM2/blob/main/LICENSE), [HF cvssp/audioldm2](https://huggingface.co/cvssp/audioldm2), [HF cvssp/audioldm2-large](https://huggingface.co/cvssp/audioldm2-large), [HF cvssp/audioldm2-music](https://huggingface.co/cvssp/audioldm2-music), [HF cvssp/audioldm-s-full-v2](https://huggingface.co/cvssp/audioldm-s-full-v2), [HF cvssp/audioldm-l-full](https://huggingface.co/cvssp/audioldm-l-full)
+- Others: [HF facebook/audiogen-medium](https://huggingface.co/facebook/audiogen-medium), [HF declare-lab/tango](https://huggingface.co/declare-lab/tango), [HF declare-lab/tango2](https://huggingface.co/declare-lab/tango2), [declare-lab/TangoFlux LICENSE.md](https://github.com/declare-lab/TangoFlux/blob/main/LICENSE.md), [hkchengrex/MMAudio LICENSE (MIT)](https://github.com/hkchengrex/MMAudio/blob/main/LICENSE), [HF hkchengrex/MMAudio](https://huggingface.co/hkchengrex/MMAudio), [FunAudioLLM/ThinkSound README (License)](https://github.com/FunAudioLLM/ThinkSound/blob/master/README.md), [HF FunAudioLLM/ThinkSound](https://huggingface.co/FunAudioLLM/ThinkSound), [HF HKUSTAudio/AudioX](https://huggingface.co/HKUSTAudio/AudioX), [HF auffusion/auffusion](https://huggingface.co/auffusion/auffusion), [sony/soundctm LICENSE (MIT) and README](https://github.com/sony/soundctm), [HF Sony/soundctm (cc-by-4.0)](https://huggingface.co/Sony/soundctm), [HF tencent/HunyuanVideo-Foley](https://huggingface.co/tencent/HunyuanVideo-Foley)
+
+## ADR-006 GENERATE_SFX op: EzAudio's Python API in the worker, whole seconds, no download path reachable, validated through ffmpeg-skill
+
+### Context
+
+Roadmap step 3 also asks for the op: done when there are an ADR and tests. The frame is ADR-004's: checks before any work, the engine in the worker, the result validated through ffmpeg-skill, then one rename.
+
+### EzAudio's API, as read from its source
+
+Read only, from haidog-yaqub/EzAudio at commit `86f18268117dde73bb274401c610e639e4a8fae1` (2025-12-16), and from the files of `OpenSound/EzAudio` (`ckpts/ezaudio-xl.yml`, `ckpts/vae/config.json`). Nothing was installed or run, and no weights were downloaded.
+
+| What | Where (at that commit) | What this skill relies on |
+|---|---|---|
+| Entry point | `api/ezaudio.py` `class EzAudio`: `__init__(self, model_name, ckpt_path=None, vae_path=None, device='cuda')`; README "Usage" | `EzAudio(model_name="s3_xl", ckpt_path=<checkout>/ckpts/s3/ezaudio_s3_xl.pt, vae_path=<checkout>/ckpts/vae/1m.pt, device=...)` |
+| Model table | `api/ezaudio.py` `configs`: `s3_xl` → `ckpts/s3/ezaudio_s3_xl.pt`, config `ckpts/ezaudio-xl.yml`; `vae` → `ckpts/vae/1m.pt` | the same paths, checked by doctor |
+| Downloads | `__init__` calls `download_ckpt(configs[...])` only when `ckpt_path` / `vae_path` is `None`; `download_ckpt` fetches the URL with urllib's `urlretrieve` when the local file is missing | both paths passed; `download_ckpt` replaced in the worker |
+| Working directory | `load_models` opens `configs[model_name]['config']`, a path relative to the working directory, with `src/utils/utils.py` `load_yaml_with_includes`; `src/modules/stable_vae/__init__.py` `load_vae` reads `config.json` beside the VAE checkpoint | the worker changes into the checkout and puts it first on `sys.path` (it imports `src.*`) |
+| Text encoder | `T5Tokenizer` / `T5EncoderModel.from_pretrained(params['text_encoder']['model'])`, `google/flan-t5-xl` in `ezaudio-xl.yml`; `src/inference.py` tokenizes with `max_length` 100 and `truncation=True` | loaded from the Hugging Face cache only (offline variables, socket guard); a prompt of more than 100 words gets a warning |
+| Generation | `generate_audio(self, text, length=10, guidance_scale=5, guidance_rescale=0.75, ddim_steps=100, eta=1, random_seed=None, randomize_seed=False) -> (sr, numpy array)`; `length * latent_sr` latent frames | `length` in whole seconds; the four defaults passed explicitly; `random_seed=seed`, `randomize_seed=False` |
+| Length | `src/inference.py` `torch.randn((1, codec_dim, audio_frames), ...)`: the frame count must be an integer; `latent_sr: 50`, `sr: 24000` (`ezaudio-xl.yml`); the DiT is configured for 500 frames (`img_size: 500`, 10 s) | durations 1-10 s, whole seconds; mono 24 kHz expected |
+| Seed | `src/inference.py`: `torch.Generator(device=device).manual_seed(random_seed)` for the initial noise and every DDIM step (`eta=1`) | the seed is always given and recorded |
+| Saving | README "Usage": `sf.write(f'{prompt}.wav', audio, sr)` (soundfile) | `soundfile.write(<run dir>/sfx.wav, audio, sr, subtype="PCM_16")` |
+
+### Decision
+
+- **Command.** `sound-design generate-sfx [--prompt <text>] [--tags a,b,...] --duration <s> -o <out.wav> [--seed N] [--engine ezaudio] [--device auto|cuda|cpu] [--timeout 600] [--overwrite] [--ffmpeg-skill DIR] [--offline] --json`.
+  - The prompt and the tags are joined as for BGM.
+  - Result schema `sound-design/generate-sfx@1`: `output`, `request`, `engine` (with `training_data`), `steps`, `provenance`, `handoff` (audio-production-skill MIX) and `warnings` (the engine's `output_warning`, plus the truncation warning).
+  - `audio.sfx_generate` moves to `EXPERIMENTAL`.
+- **Checks before any work, cheapest first** (shared with GENERATE_BGM in `ops._check_common`).
+  1. Arguments: prompt and tags non-empty, < 512 characters; seed in `[0, 2**32)`; device `auto` / `cuda` / `cpu`; timeout > 0.
+  2. Output: a new `.wav` in an existing directory, unless `--overwrite`.
+  3. Engine: `OK`, an SFX engine, and the duration inside its window as whole seconds (`EzAudioEngine.validate`).
+  4. ffmpeg-skill: located and declares `probe`.
+
+  Nothing starts until all pass.
+- **The seed is always fixed.** An omitted seed is drawn in the caller. A result whose seed differs from the request is `INVALID_RESULT`.
+- **No download path is reachable.**
+  1. Doctor and the engine refuse before any import unless every checkpoint file and the Flan-T5-XL snapshot are on disk.
+  2. Both checkpoint paths are passed, so `download_ckpt` is not called.
+  3. `EzAudio.download_ckpt` is replaced with a refusal that records the attempt (`MODEL_NOT_FOUND`).
+  4. The Hugging Face offline variables stay set, so `from_pretrained` reads the cache only.
+  5. `engines/netguard.py` blocks every non-loopback socket and name lookup before any engine import. A network attempt while loading ends as `ENGINE_FAILED` with `NetworkBlocked`.
+- **Device.** `auto` resolves to `cuda` when torch (imported in the worker with `importlib`) reports one, else `cpu`. The resolved device goes into the provenance.
+- **Validation and placement.** The worker writes `sfx.wav` in a private `.sound-design-*` directory inside the output's own directory. ffmpeg-skill `probe` must find:
+  - exactly one audio stream and no picture;
+  - the engine's sample rate (24 kHz; any other rate from EzAudio is `INVALID_RESULT` in the worker already);
+  - the requested duration ± max(0.1 s, 1 %).
+
+  Then one rename puts the file in place. The run directory is always removed. The WAV is 16-bit PCM written once, never re-encoded.
+- **Provenance.** As GENERATE_BGM, plus:
+  - `engine.training_data` and `engine.output_warning`;
+  - the exact `generate_audio` arguments;
+  - the text encoder;
+  - the EzAudio API commit;
+  - the checkout's own commit as the engine version, read from `.git` without running git.
+- **Tests: a fake checkout, not EzAudio.** `tests/helpers.py` writes a stdlib-only `api/ezaudio.py` with the class, `configs`, method names, signatures and defaults above, so a keyword that does not exist upstream fails with `TypeError`. Like upstream, it:
+  - opens the model config relative to the working directory;
+  - reads the VAE `config.json`;
+  - refuses a non-integer frame count;
+  - would call `urlretrieve` from `download_ckpt`.
+
+  It also writes stand-ins for `soundfile` and `torch.cuda.is_available`, plus findable stubs for EzAudio's other modules and the Flan-T5-XL snapshot. Its audio depends only on (seed, length). Modes simulate a wrong length, a wrong sample rate, an engine failure, a load failure, a forced download, a network attempt while loading, and a hang. The unit tests run the real worker against it through a stub ffmpeg-skill; the integration tests run the CLI against the real ffmpeg-skill `probe`.
+
+### What is verified, and what is not
+
+- **Verified here:**
+  - the adapter calls the API exactly as read;
+  - the checkpoint paths are explicit and the working directory is the checkout;
+  - a fixed seed reaches the engine and comes back;
+  - the duration check, placement and clean-up work;
+  - no download function or non-loopback socket is reachable from the worker.
+
+  Same seed and length give byte-identical files *with the deterministic fake engine*.
+- **Not verified:**
+  - bit-exact determinism, duration accuracy, speed and memory use of the real EzAudio (no install, no weights, no GPU here); `EngineSpec.deterministic` stays `false`;
+  - whether `torch.load` of the `.pt` checkpoints works with torch >= 2.6, whose `weights_only=True` default may refuse them (EzAudio's own code, unpinned torch);
+  - durations under 10 s on the real model, which was trained on 10 s (500-frame) clips.
+
+### Follow-ups
+
+- On a machine with EzAudio and its weights: generate the same (prompt, length, seed) twice per device and compare SHA-256; record the measured duration, the peak GPU memory and the time. Then set `deterministic`, `min_vram_gb` and the tolerance from those measurements.
+- Step 5 (SKILL.md, CI): an engines job that runs the real EzAudio if a runner with the weights is available.

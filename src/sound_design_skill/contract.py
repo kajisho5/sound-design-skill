@@ -8,6 +8,7 @@ from . import PACKAGE_NAME, SKILL_ID, __version__
 from .device import ACESTEP_TIERS
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP
 from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
+from .engines import ezaudio
 from .engines.acestep import DEVICES
 from .errors import ERROR_TABLE
 from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
@@ -27,10 +28,16 @@ _OP_TOOLS = {
             "schema": "sound-design/generate-bgm@1",
             "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
             "language_model": "off (Qwen3 base-model licences unverified; ADR-004)"},
-    "sfx": {"description": "A sound effect from a prompt and a duration (engine chosen by the step 3 ADR)",
-            "inputs": ["prompt", "duration in seconds", "seed"],
-            "argv": ["generate-sfx", "--prompt <text>", "--duration <seconds>", "-o <out.wav>", "[--seed <int>]",
-                     "[--timeout 600]", "[--overwrite]", "--json"]},
+    "sfx": {"description": "A sound effect from a prompt / tags, a duration in whole seconds and a seed (EzAudio, mono "
+                           "24 kHz); validated through ffmpeg-skill/probe and placed with one rename",
+            "inputs": ["prompt and / or tags (joined, < 512 characters; the text encoder reads 100 tokens)",
+                       "duration in whole seconds (engine range; EzAudio 1-10)", "seed (drawn when omitted; always recorded)"],
+            "argv": ["generate-sfx", "--prompt <text>", "[--tags <a,b,...>]", "--duration <seconds>", "-o <out.wav>",
+                     "[--seed <int>]", "[--engine ezaudio]", f"[--device {'|'.join(ezaudio.DEVICES)}]", "[--timeout 600]",
+                     "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
+            "schema": "sound-design/generate-sfx@1",
+            "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
+            "output_warning": ezaudio.OUTPUT_WARNING},
     "library": {"description": "Import a user-supplied BGM / SFX file into the asset library; refuses a missing licence",
                 "inputs": ["audio file", "licence (required)", "source / author"],
                 "argv": ["library-import", "<file>", "--licence <text|SPDX>", "[--source <url|text>]", "[--kind bgm|sfx]", "--json"]},
@@ -86,18 +93,20 @@ def contract() -> Dict[str, Any]:
                          "music recognition, licence clearance or copyright checks of generated music",
                          "downloading engines or model weights (one-time manual step; doctor says how)",
                          "network access at run time", "direct ffmpeg calls (every media step is an ffmpeg-skill tool)"],
-        "handoff": {"bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme"},
+        "handoff": {"bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme",
+                    "sfx": "audio-production-skill MIX places the generated effect (with its provenance) in the programme"},
         "tools": tools(),
         "engines": {"registered": {eid: get_engine(eid).spec.to_dict() for eid in engine_ids()},
                     "default": dict(DEFAULT_ENGINE),
-                    "selection_adr": "docs/decisions.md ADR-001 (BGM); the SFX engine ADR is roadmap step 3",
+                    "selection_adr": "docs/decisions.md ADR-001 (BGM), ADR-005 (SFX)",
                     "optional": True,
                     "statuses": ["OK", "MISSING", "INCOMPATIBLE"]},
         "device": {"reported_by": "doctor checks.device", "detected_by": ["nvidia-smi --query-gpu", "platform + sysctl hw.memsize (Apple Silicon)",
                                                                           "rocm-smi on PATH (noticed, not measured)"],
                    "statuses": ["OK", "CPU_ONLY", "UNKNOWN"], "acestep_tiers": [t for _, t in ACESTEP_TIERS]},
         "policy": {"output_use": "each engine's output-use terms and training-data claim are published in its EngineSpec "
-                                 "and copied into the provenance of every file",
+                                 "and copied into the provenance of every file; an engine's output_warning is copied into "
+                                 "every result's warnings",
                    "credit": "an engine's credit (credit_required) is carried into the provenance and must appear in the "
                              "published video's description or credits",
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance",
