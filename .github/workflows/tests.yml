@@ -35,7 +35,7 @@ jobs:
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract and probe) and
-    # AI-video-production-OS (registry conformance checks). No engine and no weights are installed (ADR-001), so
+    # Velisa, the OS (formerly AI-video-production-OS; registry conformance checks). No engine and no weights are installed (ADR-001), so
     # nothing may skip here.
     runs-on: ubuntu-24.04
     steps:
@@ -46,7 +46,7 @@ jobs:
           path: vendor/ffmpeg-skill
       - uses: actions/checkout@v4
         with:
-          repository: kajisho5/AI-video-production-OS
+          repository: kajisho5/Velisa
           path: vendor/AI-video-production-OS
       - uses: actions/setup-python@v5
         with:

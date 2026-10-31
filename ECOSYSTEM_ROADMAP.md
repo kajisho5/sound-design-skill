@@ -30,7 +30,7 @@ None. Generated assets should be placed through audio-production MIX (it owns ãƒ
   - Done when: ADR + tests
 - [x] **4. Library mode** ([#7](https://github.com/kajisho5/sound-design-skill/pull/7), [docs/decisions.md](docs/decisions.md) ADR-008; no engine (never ACE-Step or EzAudio, nothing downloaded): `sound-design library-import` refuses a missing licence with `LICENCE_REQUIRED` and records the declared licence, kind, tags, mood and measurements in `sound-library.json`; `library-index` reports every file's licence as declared or `unknown` (never cleared) with its duration / loudness measured by ffmpeg-skill; `library-pick` chooses deterministically, trims or loops through ffmpeg-skill cut / join, validates with probe and records source SHA-256, licence and fit in the provenance) â€” import user BGM/SFX with a licence field
   - Done when: refuses a missing licence
-- [ ] **5. SKILL.md, CI; (agent side) BGM -> MIX**
+- [ ] **5. SKILL.md, CI; (agent side) BGM -> MIX** (skill side done: [#8](https://github.com/kajisho5/sound-design-skill/pull/8), [docs/decisions.md](docs/decisions.md) ADR-009; `SKILL.md` kept in step with the contract by `SkillMdTests`, which run in every job of `tests.yml` (unit on Linux / macOS / Windows x Python 3.9 / 3.12, integration against the real ffmpeg-skill, nothing skipped); the agent-side SkillSpec and BGM -> MIX plan remain in video-production-agent)
   - Done when: end-to-end plan
 
 ---

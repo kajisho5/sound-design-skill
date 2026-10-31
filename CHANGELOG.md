@@ -2,6 +2,12 @@
 
 ## 0.1.0 - unreleased
 
+`SKILL.md` (roadmap step 5, skill side, ADR-009): what an agent reads, at the repository root.
+
+- Task -> command table with an example for every tool, when to use library mode or the generators, the EzAudio confirmation as an instruction (ask the user, then add `--acknowledge-ezaudio-training-data`), the library licence rules, limits, engines, the error table and what is not this skill's job. No CLI, contract or op change.
+- `tests/test_unit.py` `SkillMdTests` keep it true: frontmatter name = package name, description with "Use when" under 1024 characters, under 30 KB, an example for every contract tool, every example flag declared in that tool's `argv`, the error table equal to `ERROR_TABLE`, every capability named and `EXPERIMENTAL`, the EzAudio flag still required.
+- CI: the read-only OS checkout names `kajisho5/Velisa` (renamed from `kajisho5/AI-video-production-OS`).
+
 Library mode (roadmap step 4, ADR-008): your own BGM / SFX files with a declared licence, no engine.
 
 - `sound-design library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx [--tags] [--mood] [--loopable] [--source] [--author] [--credit] [--name] [--no-loudness] [--overwrite] --json`. A missing, empty or placeholder (`unknown`, `n/a`, ...) licence is refused first, with the new error `LICENCE_REQUIRED` (exit 2, not retryable; message in English and Japanese). The file must be audio only by ffmpeg-skill `probe`; its loudness is measured by `loudness --measure-only`. It is copied into the library (verified by SHA-256, one rename) or registered in place, and its entry is written to `sound-library.json`. Result schema `sound-design/library-import@1`; `audio.library_import` is `EXPERIMENTAL`.

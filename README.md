@@ -39,6 +39,8 @@ sound-design library-index ./sounds --loudness --json   # every file, its licenc
 sound-design library-pick ./sounds --kind bgm --tags piano --duration 60 -o bed.wav --json   # chosen, looped / trimmed
 ```
 
+For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the user first (EzAudio) and how to report licences; tests keep it in step with the contract ([ADR-009](docs/decisions.md)).
+
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
 
 - **Inputs.** `--prompt` and / or `--tags` (joined into one caption, < 512 characters), `--duration` (ACE-Step: 10-600 s), `--seed` (drawn and recorded when omitted). Optional: `--lyrics <file>` (default instrumental) and `--device auto|cuda|mps|xpu|cpu`.

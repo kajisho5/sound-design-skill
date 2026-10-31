@@ -1343,6 +1343,59 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(p["skill"], {"id": SKILL_ID, "version": __version__})
 
 
+class SkillMdTests(unittest.TestCase):
+    """SKILL.md (roadmap step 5, ADR-009) is what an agent reads: it has to agree with the code it describes."""
+
+    def setUp(self):
+        self.text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.tools = {t["argv"][0]: t for t in contract()["tools"]}
+
+    def test_frontmatter_name_and_description(self):
+        m = re.match(r"---\nname: (\S+)\ndescription: (.+)\n---\n", self.text)
+        self.assertIsNotNone(m)
+        # The repository and package name, as in voice-enhance-skill, slide-sync-skill and diarization-skill
+        package = re.search(r'^name = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M).group(1)
+        self.assertEqual(m.group(1), package)
+        self.assertIn("Use when", m.group(2))
+        self.assertLess(len(m.group(2)), 1024)
+
+    def test_stays_under_the_30kb_budget(self):
+        # Loaded into every agent session; ffmpeg-skill, imagemagick-skill and voice-enhance-skill keep the same budget.
+        self.assertLess(len(self.text.encode("utf-8")), 30_000)
+
+    def test_every_command_has_an_example(self):
+        for name in self.tools:
+            with self.subTest(name):
+                self.assertRegex(self.text, rf"`sound-design {re.escape(name)}[ `]")
+        for cmd in ("doctor", "engines", "contract"):
+            self.assertIn(f"`sound-design {cmd} --json`", self.text)
+
+    def test_every_flag_in_an_example_exists(self):
+        examples = re.findall(r"`sound-design ([a-z-]+)([^`]*)`", self.text)
+        self.assertGreater(len(examples), 8)
+        for name, rest in examples:
+            with self.subTest(name + rest):
+                self.assertIn(name, self.tools)
+                declared = set(re.findall(r"--[a-z][a-z-]*|-o\b", " ".join(self.tools[name]["argv"])))
+                for flag in re.findall(r"(?<![\w-])(--[a-z][a-z-]*|-o\b)", rest):
+                    self.assertIn(flag, declared)
+
+    def test_ezaudio_flag_and_confirmation(self):
+        sfx = self.tools["generate-sfx"]
+        self.assertTrue(sfx["confirmation_required"])
+        self.assertIn("--acknowledge-ezaudio-training-data", sfx["argv"])
+        self.assertIn("never add it on your own", self.text)
+
+    def test_every_error_code_with_its_exit_code_and_retry(self):
+        rows = dict((c, (int(x), r)) for c, x, r in re.findall(r"^\| `([A-Z_]+)` \| (\d) \| (yes|no) \|", self.text, re.M))
+        self.assertEqual(rows, {c: (x, "yes" if r else "no") for c, (x, r) in ERROR_TABLE.items()})
+
+    def test_every_capability_is_named_experimental(self):
+        for p in contract()["provides"]:
+            self.assertEqual(p["lifecycle"], "EXPERIMENTAL")
+            self.assertIn(f"`{p['id']}`", self.text)
+
+
 @unittest.skipUnless(OS_DIR, "needs an AI-video-production-OS checkout (AI_VIDEO_PRODUCTION_OS_DIR or ../AI-video-production-OS)")
 class ConformanceTests(unittest.TestCase):
     def test_registry_checks_pass(self):
