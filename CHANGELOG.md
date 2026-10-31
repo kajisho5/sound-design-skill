@@ -2,6 +2,10 @@
 
 ## 0.1.0 - unreleased
 
+ffmpeg-skill 3.0.0 (ADR-010).
+
+- ffmpeg-skill 3.x declares `contract_version` 2.0; it is read like 1.0, with no warning. Every tool and flag this skill uses is unchanged, and its `cut` calls always pass `--accurate`, so 3.0's new `cut.py` defaults do not reach it. The CI integration job also runs against 3.0.0, pinned by commit.
+
 `SKILL.md` (roadmap step 5, skill side, ADR-009): what an agent reads, at the repository root.
 
 - Task -> command table with an example for every tool, when to use library mode or the generators, the EzAudio confirmation as an instruction (ask the user, then add `--acknowledge-ezaudio-training-data`), the library licence rules, limits, engines, the error table and what is not this skill's job. No CLI, contract or op change.

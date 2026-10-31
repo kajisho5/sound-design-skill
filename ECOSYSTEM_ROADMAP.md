@@ -32,6 +32,7 @@ None. Generated assets should be placed through audio-production MIX (it owns ãƒ
   - Done when: refuses a missing licence
 - [ ] **5. SKILL.md, CI; (agent side) BGM -> MIX** (skill side done: [#8](https://github.com/kajisho5/sound-design-skill/pull/8), [docs/decisions.md](docs/decisions.md) ADR-009; `SKILL.md` kept in step with the contract by `SkillMdTests`, which run in every job of `tests.yml` (unit on Linux / macOS / Windows x Python 3.9 / 3.12, integration against the real ffmpeg-skill, nothing skipped); the agent-side SkillSpec and BGM -> MIX plan remain in video-production-agent)
   - Done when: end-to-end plan
+- [x] **6. ffmpeg-skill 3.0.0** â€” its contract_version 2.0 read without a warning; CI integration also against 3.0.0 ([#PRNUM](https://github.com/kajisho5/sound-design-skill/pull/PRNUM), ADR-010)
 
 ---
 Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (42 tools, treated as complete). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).

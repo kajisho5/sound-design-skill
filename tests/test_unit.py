@@ -1255,7 +1255,8 @@ class FfmpegSkillContractTests(unittest.TestCase):
         self.assertEqual(info.version, "2.21.0")
         self.assertFalse(parse_contract(self.doc(drop=("probe", "inputs")), Path(".")).supported)
         self.assertIn("'probe' is missing", parse_contract(dict(self.doc(), tools=[]), Path(".")).problems[0])
-        self.assertTrue(parse_contract(dict(self.doc(), contract_version="2.0"), Path(".")).warnings)
+        self.assertFalse(parse_contract(dict(self.doc(), contract_version="2.0"), Path(".")).warnings)   # ffmpeg-skill 3.x (ADR-010)
+        self.assertTrue(parse_contract(dict(self.doc(), contract_version="3.0"), Path(".")).warnings)
 
     def test_locate_explicit_dir_is_never_replaced(self):
         with self.assertRaises(SoundDesignError) as e:
