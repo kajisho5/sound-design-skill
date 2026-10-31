@@ -13,9 +13,8 @@ Scaffold: one-line README. Engine in ecosystem.json: ACE-Step 1.5 (MIT, commerci
 
 | Owned job | Status | Note |
 |---|---|---|
-| BGM生成 | experimental | GENERATE_BGM (ACE-Step 1.5), step 2 |
-| 効果音 | experimental | GENERATE_SFX (EzAudio), step 3 |
-| (both) user files | experimental | library mode (no engine, declared licence), step 4 |
+| BGM生成 | experimental | GENERATE_BGM (ACE-Step 1.5), step 2; or the user's own file through library mode, step 4 |
+| 効果音 | experimental | GENERATE_SFX (EzAudio), step 3; or the user's own file through library mode, step 4 |
 
 ## Wiring
 
