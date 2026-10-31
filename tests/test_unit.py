@@ -1,33 +1,39 @@
 """Unit tests: contract, typed errors, the engine registry and EngineSpec, availability checks (mocked package
 lookups, a fake ACE-Step install, a fake checkpoints directory and Hugging Face cache), device / GPU memory detection
-(mocked nvidia-smi and sysctl), the worker subprocess, doctor, provenance and the OS registry conformance checks. No
-engine, no weights, no GPU, no ffmpeg and no network are needed; nothing is downloaded."""
+(mocked nvidia-smi and sysctl), the worker subprocess and its network guard, the ACE-Step adapter against a fake
+engine with the verified API (ADR-004), GENERATE_BGM through a stub ffmpeg-skill, doctor, provenance and the OS
+registry conformance checks. No engine, no weights, no GPU, no ffmpeg and no network are needed; nothing is
+downloaded."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import wave
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from helpers import (OS_DIR, ROOT, env, fake_acestep_install, fake_checkpoints, fake_hf_snapshot, no_engines_env,
-                     run_cli)
+from helpers import (CHECKPOINT_FILES, OS_DIR, ROOT, env, fake_acestep_engine, fake_acestep_install, fake_checkpoints,
+                     fake_hf_snapshot, no_engines_env, run_cli)
 
 from sound_design_skill import SKILL_ID, __version__, device
 from sound_design_skill.contract import CAPABILITY_IDS, contract
 from sound_design_skill.doctor import doctor
 from sound_design_skill.engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
-from sound_design_skill.engines import acestep, lookup, pkgprobe
+from sound_design_skill.engines import acestep, lookup, netguard, pkgprobe
 from sound_design_skill.engines.base import OPS, EngineRequest, EngineResult, in_range, parse_version
 from sound_design_skill.errors import ERROR_TABLE, EXIT_CODES, SoundDesignError
-from sound_design_skill.ffmpeg_skill import FLAGS_USED, FfmpegSkill, parse_contract
+from sound_design_skill.ffmpeg_skill import FLAGS_USED, FfmpegSkill, SkillInfo, parse_contract
+from sound_design_skill.ops import BGM_SCHEMA, BgmRequest, caption_from, generate_bgm, tolerance_for
 from sound_design_skill.procs import TIMEOUT_EXIT, run_process_group
 from sound_design_skill.provenance import build_provenance, sha256_file, sha256_text
 from sound_design_skill.service import engine_interpreter, run_engine
@@ -78,8 +84,15 @@ class ContractTests(unittest.TestCase):
         for p in c["provides"]:
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
-            self.assertEqual(p["lifecycle"], "PROPOSED")       # no op is implemented in this release (ADR-002)
-        self.assertFalse(any(t["implemented"] for t in c["tools"] if t["role"] in ("generation", "ingest")))
+        # GENERATE_BGM is implemented since step 2 (ADR-004); SFX (step 3) and library mode (step 4) are not
+        self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
+                         {"audio.bgm_generate": "EXPERIMENTAL", "audio.sfx_generate": "PROPOSED", "audio.library_import": "PROPOSED"})
+        self.assertEqual({t["tool_id"]: t["implemented"] for t in c["tools"] if t["role"] in ("generation", "ingest")},
+                         {"sound-design/generate-bgm": True, "sound-design/generate-sfx": False, "sound-design/library-import": False})
+        bgm = next(t for t in c["tools"] if t["tool_id"] == "sound-design/generate-bgm")
+        self.assertEqual(bgm["schema"], BGM_SCHEMA)
+        self.assertIn("off", bgm["language_model"])
+        self.assertFalse(bgm["deterministic"])                                # unverified on the real engine
         for d in c["dependencies"]:
             self.assertIsInstance(d["version_range"], str)
             self.assertFalse(d["version_range"].replace(".", "").isdigit(), d)
@@ -215,10 +228,17 @@ class AceStepAvailabilityTests(unittest.TestCase):
                 self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")
                 fake_hf_snapshot(self.cache, "ACE-Step/Ace-Step1.5", acestep.REQUIRED_FILES[:2])   # partial download
                 self.assertIn("vae/", eng.inspect()["detail"])
+                fake_hf_snapshot(self.cache, "ACE-Step/Ace-Step1.5", acestep.REQUIRED_FILES)   # no 1.7B LM: ACE-Step would download
+                r = eng.inspect()
+                self.assertEqual((r["status"], r["missing"]), ("MISSING", "model"))
+                self.assertIn("would download", r["detail"])
+                self.assertIn("acestep-5Hz-lm-1.7B", r["detail"])
                 fake_hf_snapshot(self.cache, "ACE-Step/Ace-Step1.5")
                 r = eng.report()
-                self.assertEqual((r["status"], r["model"], r["install"], r["lm_models"]), ("OK", "acestep-v15-turbo", None, []))
-                self.assertIn("DiT-only", r["lm_note"])
+                self.assertEqual((r["status"], r["model"], r["install"], r["lm_models"]),
+                                 ("OK", "acestep-v15-turbo", None, ["acestep-5Hz-lm-1.7B"]))
+                self.assertIn("not used", r["lm_note"])               # present on disk, never loaded (ADR-004)
+                self.assertIn("Qwen3", r["lm_status"])
 
     def test_explicit_checkpoints_dir_is_never_replaced_by_the_cache(self):
         fake_hf_snapshot(self.cache, "ACE-Step/Ace-Step1.5")
@@ -228,9 +248,20 @@ class AceStepAvailabilityTests(unittest.TestCase):
             r = get_engine("acestep").inspect()
             self.assertEqual(r["missing"], "model")
             self.assertIn("$SOUND_DESIGN_ACESTEP_CHECKPOINTS", r["detail"])
-            fake_checkpoints(ckpt, acestep.REQUIRED_FILES + ("acestep-5Hz-lm-0.6B/model.safetensors",))
+            fake_checkpoints(ckpt, CHECKPOINT_FILES + ("acestep-5Hz-lm-0.6B/model.safetensors",))
             r = get_engine("acestep").inspect()
-            self.assertEqual((r["status"], r["lm_models"], r["lm_note"]), ("OK", ["acestep-5Hz-lm-0.6B"], None))
+            self.assertEqual((r["status"], r["lm_models"]), ("OK", ["acestep-5Hz-lm-0.6B", "acestep-5Hz-lm-1.7B"]))
+            self.assertIn("not used", r["lm_note"])
+
+    def test_component_check_mirrors_acestep_weights_rule(self):
+        """acestep/model_downloader.py _contains_model_weights: any one of its weight file names counts (a sharded
+        checkpoint has only an index file)."""
+        ckpt = Path(self.cache) / "ckpt"
+        fake_checkpoints(str(ckpt), acestep.REQUIRED_FILES + ("acestep-5Hz-lm-1.7B/model.safetensors.index.json",))
+        self.assertEqual(acestep.missing_components(ckpt), [])
+        (ckpt / "acestep-5Hz-lm-1.7B" / "model.safetensors.index.json").unlink()
+        (ckpt / "acestep-5Hz-lm-1.7B" / "config.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(acestep.missing_components(ckpt), ["acestep-5Hz-lm-1.7B"])
 
     def test_real_lookup_finds_a_fake_install_without_importing_it(self):
         ckpt = fake_checkpoints(os.path.join(self.cache, "ckpt"))
@@ -381,14 +412,15 @@ class WorkerTests(unittest.TestCase):
             run_engine("acestep", req(duration=3), 60, tmp)
         self.assertEqual((e.exception.code, e.exception.details["range"]), ("INVALID_ARGUMENT", [10.0, 600.0]))
 
-    def test_installed_engine_reaches_not_implemented_through_the_worker(self):
+    def test_an_engine_without_process_is_still_not_implemented(self):
+        class Bare(acestep.AceStepEngine):
+            process = acestep.Engine.process
         with tempfile.TemporaryDirectory() as tmp:
             ckpt = fake_checkpoints(os.path.join(tmp, "ckpt"))
             with env(**no_engines_env(tmp)), env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=ckpt), fake_acestep_install(tmp), \
                     self.assertRaises(SoundDesignError) as e:
-                run_engine("acestep", req(output_path=os.path.join(tmp, "bed.wav")), 60, tmp)
-        self.assertEqual((e.exception.code, e.exception.exit_code), ("NOT_IMPLEMENTED", 5))   # step 2 implements it
-        self.assertEqual((e.exception.details["op"], e.exception.details["roadmap_step"]), ("bgm", 2))
+                Bare().process(req(output_path=os.path.join(tmp, "bed.wav")))
+        self.assertEqual((e.exception.code, e.exception.exit_code), ("NOT_IMPLEMENTED", 5))
 
     def test_engine_timeout_is_retryable(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -412,6 +444,325 @@ class WorkerTests(unittest.TestCase):
                     self.assertRaises(SoundDesignError) as e:
                 run_engine("acestep", req(), 30, tmp)
         self.assertEqual(e.exception.code, "INVALID_RESULT")
+
+
+class NetGuardTests(unittest.TestCase):
+    """The worker refuses the network before any engine import (ADR-004): ModelScope is not covered by HF_HUB_OFFLINE."""
+
+    def test_non_loopback_connects_and_lookups_are_refused_loopback_works(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        undo = netguard.install()
+        try:
+            for host in ("www.google.com", "huggingface.co", "modelscope.cn"):
+                with self.assertRaises(netguard.NetworkBlocked):
+                    socket.getaddrinfo(host, 443)
+                with self.assertRaises(netguard.NetworkBlocked):
+                    socket.gethostbyname(host)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                with self.assertRaises(netguard.NetworkBlocked):
+                    s.connect(("192.0.2.1", 443))                     # TEST-NET-1: refused before any packet
+                with self.assertRaises(netguard.NetworkBlocked):
+                    s.connect_ex(("www.google.com", 443))
+            finally:
+                s.close()
+            with self.assertRaises(OSError):                          # what ACE-Step's _can_access_google catches
+                socket.create_connection(("www.google.com", 443), timeout=1)
+            c = socket.create_connection(server.getsockname(), timeout=5)
+            c.close()
+        finally:
+            undo()
+            server.close()
+        self.assertIs(socket.socket.connect, socket.socket.connect)   # undone: the real methods are back
+        self.assertTrue(netguard.is_local_host("::1") and netguard.is_local_host("localhost"))
+        self.assertFalse(netguard.is_local_host("10.0.0.1"))
+
+    def test_worker_installs_the_guard_before_the_engine_is_imported(self):
+        """In a fresh interpreter with the worker's environment, and in the worker's source order."""
+        script = ("import socket, sys; from sound_design_skill.engines import netguard; netguard.install(); "
+                  "\ntry:\n    socket.getaddrinfo('modelscope.cn', 443)\nexcept netguard.NetworkBlocked:\n    sys.exit(0)\nsys.exit(1)")
+        from sound_design_skill.service import worker_env
+        code, _, err = run_process_group([sys.executable, "-c", script], 60, env=worker_env())
+        self.assertEqual(code, 0, err)
+        text = (SRC / "engines" / "worker.py").read_text(encoding="utf-8")
+        self.assertLess(text.index("netguard.install()"), text.index("from . import get_engine"))
+
+
+class AceStepEngineTests(unittest.TestCase):
+    """AceStepEngine.process in the real worker subprocess, against the fake `acestep` package (tests/helpers.py) that
+    has the API surface ADR-004 verified and writes a deterministic WAV for a seed and a duration."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.ckpt = fake_checkpoints(os.path.join(self.dir, "ckpt"))
+        stack = [env(**no_engines_env(self.dir)), env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=self.ckpt)]
+        for cm in stack:
+            cm.__enter__()
+            self.addCleanup(cm.__exit__, None, None, None)
+        engine_cm = fake_acestep_engine(self.dir)
+        self.fake = engine_cm.__enter__()
+        self.addCleanup(engine_cm.__exit__, None, None, None)
+        self.n = 0
+
+    def run_engine(self, **kw):
+        self.n += 1
+        run_dir = os.path.join(self.dir, f"run{self.n}")
+        os.mkdir(run_dir)
+        kw.setdefault("output_path", os.path.join(run_dir, "bgm.wav"))
+        kw.setdefault("duration", 10.0)
+        return run_engine("acestep", req(**kw), 60, run_dir)
+
+    def events(self, name):
+        return [c for c in self.fake["calls"]() if c["event"] == name]
+
+    def test_generates_through_the_verified_api(self):
+        res = self.run_engine(seed=7, prompt="calm piano bed, 70 bpm")
+        self.assertTrue(os.path.isfile(res.output_path))
+        self.assertEqual((res.seed, res.sample_rate, res.model, res.engine_version), (7, 48000, "acestep-v15-turbo", "1.5.0"))
+        with wave.open(res.output_path) as w:
+            self.assertEqual((w.getframerate(), w.getnchannels(), w.getnframes()), (48000, 2, 480000))
+        init = self.events("initialize_service")
+        self.assertEqual(len(init), 1)
+        self.assertEqual((init[0]["config_path"], init[0]["vae_checkpoint"], init[0]["device"], init[0]["prefer_source"]),
+                         ("acestep-v15-turbo", "official", "auto", None))
+        self.assertEqual(Path(init[0]["checkpoint_dir"]), Path(self.ckpt).resolve())   # via ACESTEP_CHECKPOINTS_DIR
+        self.assertEqual(init[0]["hf_offline"], "1")
+        gen = self.events("generate_music")
+        self.assertEqual(len(gen), 1)
+        p, cfg = gen[0]["params"], gen[0]["config"]
+        self.assertTrue(gen[0]["llm_handler_is_none"])                 # the 5 Hz LM is never loaded
+        self.assertEqual((p["task_type"], p["caption"], p["duration"], p["seed"]), ("text2music", "calm piano bed, 70 bpm", 10.0, 7))
+        self.assertEqual((p["instrumental"], p["lyrics"]), (True, "[Instrumental]"))
+        self.assertFalse(p["thinking"] or p["use_cot_metas"] or p["use_cot_caption"] or p["use_cot_language"])
+        self.assertEqual((cfg["batch_size"], cfg["use_random_seed"], cfg["seeds"], cfg["audio_format"]), (1, False, [7], "wav"))
+        self.assertEqual(res.extra["lm"]["enabled"], False)
+        self.assertIn("ca1e85fe", res.extra["api"])
+        self.assertEqual(self.events("download") + self.events("google_probe_failed"), [])
+        self.assertNotIn("acestep", sys.modules)                      # imported in the worker only
+
+    def test_same_seed_and_duration_give_the_same_file(self):
+        digest = lambda r: hashlib.sha256(Path(r.output_path).read_bytes()).hexdigest()   # noqa: E731
+        a, b, c = self.run_engine(seed=42), self.run_engine(seed=42), self.run_engine(seed=43)
+        self.assertEqual(digest(a), digest(b))
+        self.assertNotEqual(digest(a), digest(c))
+
+    def test_lyrics_turn_off_instrumental(self):
+        self.run_engine(lyrics="[verse]\nこんにちは")
+        p = self.events("generate_music")[0]["params"]
+        self.assertEqual((p["instrumental"], p["lyrics"]), (False, "[verse]\nこんにちは"))
+
+    def test_an_omitted_seed_is_drawn_and_reported(self):
+        res = self.run_engine(seed=None)
+        self.assertEqual(self.events("generate_music")[0]["config"]["seeds"], [res.seed])
+
+    def test_a_download_attempt_is_refused_and_never_reaches_the_network(self):
+        self.fake["set_mode"]("force_download")
+        with self.assertRaises(SoundDesignError) as e:
+            self.run_engine()
+        self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")
+        self.assertIn("_smart_download", e.exception.message)
+        # ACE-Step's own download functions and Google probe were replaced, so none of them ran
+        self.assertEqual(self.events("download") + self.events("google_probe_failed"), [])
+        self.assertEqual(self.events("generate_music"), [])
+
+    def test_checkpoints_acestep_would_complete_by_download_are_refused_before_import(self):
+        (Path(self.ckpt) / "acestep-5Hz-lm-1.7B" / "model.safetensors").unlink()
+        with self.assertRaises(SoundDesignError) as e:
+            self.run_engine()
+        self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")
+        self.assertIn("would download", e.exception.message)
+        self.assertEqual(self.fake["calls"](), [])
+
+    def test_engine_failures_are_structured(self):
+        for mode, code, text in (("init_fail", "ENGINE_FAILED", "CUDA out of memory"), ("fail", "ENGINE_FAILED", "diffusion failed"),
+                                 ("wrong_seed", "INVALID_RESULT", "seed")):
+            self.fake["set_mode"](mode)
+            with self.assertRaises(SoundDesignError, msg=mode) as e:
+                self.run_engine(seed=5)
+            self.assertEqual(e.exception.code, code, mode)
+            self.assertIn(text, e.exception.message, mode)
+
+    def test_arguments_the_engine_cannot_take_are_refused_in_the_worker(self):
+        for kw in ({"prompt": "x" * 513}, {"lyrics": "  "}, {"params": {"device": "tpu"}}):
+            with self.assertRaises(SoundDesignError, msg=kw) as e:
+                self.run_engine(**kw)
+            self.assertEqual(e.exception.code, "INVALID_ARGUMENT", kw)
+        self.assertEqual(self.fake["calls"](), [])
+
+
+class StubFfmpegSkill:
+    """ffmpeg-skill stand-in for the unit tests: probe reads the WAV header with the wave module (the integration
+    tests use the real ffmpeg-skill)."""
+
+    def __init__(self):
+        self.probed = []
+
+    def info(self):
+        return SkillInfo(Path("stub"), "2.23.0", "1.0", {"probe": {}}, [])
+
+    def probe(self, path):
+        self.probed.append(path)
+        try:
+            with wave.open(path) as w:
+                rate, ch, n = w.getframerate(), w.getnchannels(), w.getnframes()
+        except (wave.Error, EOFError) as e:
+            raise SoundDesignError("UNSUPPORTED_MEDIA", f"stub probe: {e}")
+        return {"duration": n / rate, "video": None, "stream_counts": {"video": 0, "audio": 1},
+                "audio": {"codec": "pcm_s16le", "sample_rate": rate, "channels": ch}}
+
+
+class GenerateBgmTests(unittest.TestCase):
+    """GENERATE_BGM end to end in-process: checks, the real worker with the fake engine, validation through a stub
+    ffmpeg-skill, provenance and placement (ADR-004)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.out_dir = os.path.join(self.dir, "out")
+        os.mkdir(self.out_dir)
+        self.ckpt = fake_checkpoints(os.path.join(self.dir, "ckpt"))
+        for cm in (env(**no_engines_env(self.dir)), env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=self.ckpt)):
+            cm.__enter__()
+            self.addCleanup(cm.__exit__, None, None, None)
+        engine_cm = fake_acestep_engine(self.dir)
+        self.fake = engine_cm.__enter__()
+        self.addCleanup(engine_cm.__exit__, None, None, None)
+        self.skill = StubFfmpegSkill()
+
+    def out(self, name="bed.wav"):
+        return os.path.join(self.out_dir, name)
+
+    def bgm(self, **kw):
+        kw.setdefault("output_path", self.out())
+        kw.setdefault("duration", 12.0)
+        kw.setdefault("prompt", "calm piano bed")
+        return generate_bgm(BgmRequest(**kw), skill=self.skill)
+
+    def assert_clean(self):
+        self.assertEqual([n for n in os.listdir(self.out_dir) if n.startswith(".sound-design-")], [])
+
+    def test_bed_with_provenance(self):
+        doc = self.bgm(tags=["ambient", " 70 bpm "], seed=1234)
+        self.assertEqual((doc["schema"], doc["ok"], doc["capability"]), (BGM_SCHEMA, True, "audio.bgm_generate"))
+        self.assertEqual(doc["output"]["path"], self.out())
+        self.assertAlmostEqual(doc["output"]["duration"], 12.0, places=3)
+        self.assertEqual((doc["output"]["sample_rate"], doc["output"]["channels"]), (48000, 2))
+        self.assertEqual(doc["request"], {"prompt": "calm piano bed, ambient, 70 bpm", "duration": 12.0, "seed": 1234,
+                                          "seed_source": "given"})
+        p = doc["provenance"]
+        self.assertEqual((p["op"], p["seed"], p["prompt"]["text"]), ("bgm", 1234, "calm piano bed, ambient, 70 bpm"))
+        self.assertEqual(p["output"]["sha256"], sha256_file(self.out()))
+        self.assertEqual(p["output"]["sha256"], doc["output"]["sha256"])
+        self.assertEqual(p["duration"]["requested"], 12.0)
+        self.assertAlmostEqual(p["duration"]["measured"], 12.0, places=3)
+        self.assertEqual(p["duration"]["tolerance"], tolerance_for(12.0))
+        e = p["engine"]
+        self.assertEqual((e["id"], e["version"], e["model"]), ("acestep", "1.5.0", "acestep-v15-turbo"))
+        self.assertTrue(e["code_license"].startswith("MIT") and e["weights_license"].startswith("MIT"))
+        self.assertIn("commercial", e["output_use"])
+        self.assertIn("Qwen3", e["lm_status"])
+        self.assertNotIn("interpreter", e)
+        self.assertEqual(p["parameters"]["tags"], ["ambient", "70 bpm"])
+        self.assertEqual(p["parameters"]["lm"]["enabled"], False)
+        self.assertEqual(p["parameters"]["generation_config"]["seeds"], [1234])
+        self.assertEqual(p["ffmpeg_skill"]["version"], "2.23.0")
+        self.assertFalse(p["network"])
+        self.assertEqual(self.skill.probed[-1].endswith("bgm.wav"), True)   # probed in the run dir, before placement
+        self.assert_clean()
+        self.assertNotIn("acestep", sys.modules)
+        json.dumps(doc, ensure_ascii=True, allow_nan=False)
+
+    def test_seed_is_drawn_when_omitted_and_the_same_seed_repeats_the_file(self):
+        first = self.bgm(output_path=self.out("a.wav"))
+        self.assertEqual(first["request"]["seed_source"], "drawn")
+        self.assertTrue(0 <= first["provenance"]["seed"] < 2 ** 32)
+        again = self.bgm(output_path=self.out("b.wav"), seed=first["provenance"]["seed"])
+        self.assertEqual(again["output"]["sha256"], first["output"]["sha256"])     # deterministic for a given seed
+
+    def test_a_wrong_duration_is_invalid_result_and_nothing_is_written(self):
+        self.fake["set_mode"]("short")
+        with self.assertRaises(SoundDesignError) as e:
+            self.bgm()
+        self.assertEqual(e.exception.code, "INVALID_RESULT")
+        self.assertIn("duration", e.exception.message)
+        self.assertFalse(os.path.exists(self.out()))
+        self.assert_clean()
+
+    def test_checks_run_before_any_work(self):
+        Path(self.out("exists.wav")).write_bytes(b"x")
+        lyrics = self.out("lyrics.wav")
+        Path(lyrics).write_text("[verse]\nla la", encoding="utf-8")
+        cases = [
+            ({"output_path": self.out("exists.wav")}, "OUTPUT_EXISTS"),
+            ({"output_path": self.out("bed.mp3")}, "INVALID_ARGUMENT"),
+            ({"output_path": os.path.join(self.dir, "no-such-dir", "bed.wav")}, "INVALID_ARGUMENT"),
+            ({"output_path": self.out_dir + os.sep + "sub.wav", "prompt": "  ", "tags": []}, "INVALID_ARGUMENT"),
+            ({"prompt": "x" * 600}, "INVALID_ARGUMENT"),
+            ({"seed": -1}, "INVALID_ARGUMENT"),
+            ({"seed": 2 ** 32}, "INVALID_ARGUMENT"),
+            ({"seed": True}, "INVALID_ARGUMENT"),
+            ({"duration": 5.0}, "INVALID_ARGUMENT"),
+            ({"duration": 601.0}, "INVALID_ARGUMENT"),
+            ({"device": "tpu"}, "INVALID_ARGUMENT"),
+            ({"timeout": 0}, "INVALID_ARGUMENT"),
+            ({"lyrics_path": self.out("no-lyrics.txt")}, "INPUT_NOT_FOUND"),
+            ({"lyrics_path": lyrics, "output_path": lyrics, "overwrite": True}, "OUTPUT_IS_INPUT"),
+            ({"engine": "musicgen"}, "ENGINE_UNAVAILABLE"),
+        ]
+        for kw, code in cases:
+            with self.assertRaises(SoundDesignError, msg=kw) as e:
+                self.bgm(**kw)
+            self.assertEqual(e.exception.code, code, kw)
+        self.assertEqual(self.fake["calls"](), [])                    # no worker reached the engine
+        self.assertEqual(self.skill.probed, [])
+        self.assert_clean()
+
+    def test_engine_is_checked_before_ffmpeg_skill(self):
+        os.remove(os.path.join(self.ckpt, "vae", "diffusion_pytorch_model.safetensors"))
+        with self.assertRaises(SoundDesignError) as e:
+            generate_bgm(BgmRequest(output_path=self.out(), duration=12.0, prompt="x",
+                                    ffmpeg_skill_dir=os.path.join(self.dir, "no-ffmpeg-skill")))
+        self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")     # not FFMPEG_SKILL_UNAVAILABLE
+        self.assertEqual(self.fake["calls"](), [])
+
+    def test_overwrite_and_lyrics(self):
+        Path(self.out()).write_bytes(b"old")
+        lyrics = self.out("words.txt")
+        Path(lyrics).write_text("[verse]\n静かな朝", encoding="utf-8")
+        doc = self.bgm(overwrite=True, lyrics_path=lyrics, seed=3)
+        self.assertNotEqual(Path(self.out()).read_bytes(), b"old")
+        self.assertEqual(doc["provenance"]["parameters"]["instrumental"], False)
+        self.assertEqual(doc["provenance"]["parameters"]["lyrics_sha256"], sha256_text("[verse]\n静かな朝"))
+        self.assertEqual(self.fake["calls"]()[-1]["params"]["lyrics"], "[verse]\n静かな朝")
+
+    def test_timeout_kills_the_engine_and_cleans_up(self):
+        self.fake["set_mode"]("sleep")
+        t0 = time.time()
+        with self.assertRaises(SoundDesignError) as e:
+            self.bgm(timeout=3)
+        self.assertEqual((e.exception.code, e.exception.retryable), ("ENGINE_TIMEOUT", True))
+        self.assertLess(time.time() - t0, 30)
+        self.assertFalse(os.path.exists(self.out()))
+        self.assert_clean()
+
+    def test_caption_from(self):
+        self.assertEqual(caption_from(" lo-fi ", ["piano", " ", "rain"]), "lo-fi, piano, rain")
+        self.assertEqual(caption_from(None, ["ambient"]), "ambient")
+        self.assertEqual(caption_from("", []), "")
+        self.assertEqual((tolerance_for(10.0), tolerance_for(300.0)), (0.1, 3.0))
+
+    def test_cli_reports_a_missing_engine_as_json(self):
+        with env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=os.path.join(self.dir, "empty")):
+            rc, doc = run_cli("generate-bgm", "--prompt", "calm piano", "--tags", "ambient,70 bpm", "--duration", "12",
+                              "-o", self.out(), "--seed", "9", "--json")
+        self.assertEqual((rc, doc["ok"], doc["error"]["code"]), (3, False, "MODEL_NOT_FOUND"))
+        self.assertTrue(doc["error"]["details"]["install"])
+        self.assertFalse(os.path.exists(self.out()))
 
 
 class FfmpegSkillContractTests(unittest.TestCase):

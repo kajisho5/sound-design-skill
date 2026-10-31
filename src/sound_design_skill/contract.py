@@ -8,6 +8,7 @@ from . import PACKAGE_NAME, SKILL_ID, __version__
 from .device import ACESTEP_TIERS
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP
 from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
+from .engines.acestep import DEVICES
 from .errors import ERROR_TABLE
 from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .provenance import ENGINE_FIELDS
@@ -16,10 +17,16 @@ CONTRACT_VERSION = "1.0"
 CAPABILITY_IDS = {"bgm": "audio.bgm_generate", "sfx": "audio.sfx_generate", "library": "audio.library_import"}
 TOOL_NAMES = {"bgm": "generate-bgm", "sfx": "generate-sfx", "library": "library-import"}
 _OP_TOOLS = {
-    "bgm": {"description": "A music bed from a prompt / tags, a target duration and a seed; instrumental unless lyrics are given",
-            "inputs": ["prompt (caption or tags)", "duration in seconds (engine range)", "seed (recorded; random when omitted)"],
-            "argv": ["generate-bgm", "--prompt <text>", "--duration <seconds>", "-o <out.wav>", "[--seed <int>]",
-                     "[--engine acestep]", "[--lyrics <file>]", "[--timeout 3600]", "[--overwrite]", "--json"]},
+    "bgm": {"description": "A music bed from a prompt / tags, a target duration and a seed; instrumental unless lyrics are "
+                           "given; validated through ffmpeg-skill/probe and placed with one rename",
+            "inputs": ["prompt and / or tags (joined into one caption, < 512 characters)", "duration in seconds (engine range)",
+                       "seed (drawn when omitted; always recorded)"],
+            "argv": ["generate-bgm", "--prompt <text>", "[--tags <a,b,...>]", "--duration <seconds>", "-o <out.wav>",
+                     "[--seed <int>]", "[--engine acestep]", "[--lyrics <file>]", f"[--device {'|'.join(DEVICES)}]",
+                     "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
+            "schema": "sound-design/generate-bgm@1",
+            "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
+            "language_model": "off (Qwen3 base-model licences unverified; ADR-004)"},
     "sfx": {"description": "A sound effect from a prompt and a duration (engine chosen by the step 3 ADR)",
             "inputs": ["prompt", "duration in seconds", "seed"],
             "argv": ["generate-sfx", "--prompt <text>", "--duration <seconds>", "-o <out.wav>", "[--seed <int>]",
@@ -96,12 +103,13 @@ def contract() -> Dict[str, Any]:
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance",
                    "library_licence": "a library import without a licence is refused (roadmap step 4)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "prompt.text", "prompt.sha256", "seed",
-                                  "duration.requested", "duration.measured", "output.sha256", "parameters",
+                                  "duration.requested", "duration.measured", "duration.tolerance", "output.sha256", "parameters",
                                   "ffmpeg_skill.version", "network"],
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["sound-design", "<command>", "...", "--json"], "network": False, "shell": False,
                       "engine_process": "worker subprocess in its own process group (under the engine's own interpreter "
-                                        "when configured), killed on --timeout; Hugging Face libraries forced offline",
+                                        "when configured), killed on --timeout; Hugging Face libraries forced offline, "
+                                        "engine download functions replaced, every non-loopback socket refused (ADR-004)",
                       "media": "through ffmpeg-skill tools only", "input_is_read_only": True,
                       "overwrites": "never unless --overwrite; an output equal to an input is refused",
                       "offline_flag": "accepted everywhere; every registered engine works with no network"},

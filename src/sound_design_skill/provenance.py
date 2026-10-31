@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from . import SKILL_ID, __version__
 
 ENGINE_FIELDS = ("id", "version", "model", "code_license", "weights_license", "output_use", "credit", "credit_required",
-                 "watermark", "execution_mode", "deterministic", "licence_checked")
+                 "watermark", "execution_mode", "deterministic", "lm_status", "licence_checked")
 
 
 def sha256_file(path: str, chunk: int = 1 << 20) -> str:

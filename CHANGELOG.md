@@ -2,6 +2,21 @@
 
 ## 0.1.0 - unreleased
 
+GENERATE_BGM (roadmap step 2, ADR-004).
+
+- `sound-design generate-bgm --prompt/--tags --duration -o out.wav [--seed] [--lyrics] [--device] --json`. Result schema `sound-design/generate-bgm@1`; `audio.bgm_generate` is `EXPERIMENTAL`.
+- ACE-Step 1.5 is called through its Python API as read from ace-step/ACE-Step-1.5@ca1e85fe: `AceStepHandler.initialize_service(config_path="acestep-v15-turbo", vae_checkpoint="official")`, then `generate_music(dit, None, GenerationParams(...), GenerationConfig(batch_size=1, use_random_seed=False, seeds=[seed], audio_format="wav"))`. This runs in the worker only, under `SOUND_DESIGN_ACESTEP_PYTHON`.
+- An omitted seed is drawn by the skill, so the engine always runs with a fixed, recorded seed.
+- No download is possible:
+  - doctor and the worker check ACE-Step's own component rule; it requires the 1.7B LM on disk, so doctor now reports MISSING without it;
+  - `ACESTEP_CHECKPOINTS_DIR` points ACE-Step at the local directory;
+  - ACE-Step's Hugging Face / ModelScope download functions are replaced with refusals;
+  - the worker blocks every non-loopback socket and name lookup (`engines/netguard.py`).
+- The 5 Hz LM is off (`llm_handler=None`, no chain-of-thought) until the Qwen3 base licences are verified; `EngineSpec.lm_status` records this in the contract, doctor and every provenance.
+- The output is validated through ffmpeg-skill `probe` (one audio stream, the engine's sample rate, duration within max(0.1 s, 1 %)), then renamed into place from a private run directory.
+- The provenance carries the engine, licences, LM status, caption, seed, durations, output SHA-256 and the exact ACE-Step parameters.
+- Tests run a fake `acestep` package with the verified API and a deterministic WAV (seed, duration). Real-engine determinism and duration accuracy are not measured yet.
+
 Package skeleton (roadmap step 1).
 
 - ADR-001: engines. ACE-Step 1.5 checked from primary sources, code and weights separately:

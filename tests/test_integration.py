@@ -1,6 +1,8 @@
 """Integration with a real ffmpeg-skill checkout and a real FFmpeg: locate it, check every tool and flag this skill
-uses against its live contract, run its doctor, and probe a WAV through it. Skipped without a checkout
-(SOUND_DESIGN_FFMPEG_SKILL_DIR or ../ffmpeg-skill); CI's integration job always has one."""
+uses against its live contract, run its doctor, probe a WAV through it, and run GENERATE_BGM end to end through the
+CLI (the real worker with the fake ACE-Step engine of tests/helpers.py, the result validated by the real
+ffmpeg-skill/probe). Skipped without a checkout (SOUND_DESIGN_FFMPEG_SKILL_DIR or ../ffmpeg-skill); CI's integration
+job always has one."""
 from __future__ import annotations
 
 import os
@@ -8,7 +10,7 @@ import shutil
 import tempfile
 import unittest
 
-from helpers import FFMPEG_SKILL_DIR, env, no_engines_env, run_cli, write_tone_wav
+from helpers import FFMPEG_SKILL_DIR, env, fake_acestep_engine, fake_checkpoints, no_engines_env, run_cli, write_tone_wav
 
 from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
@@ -49,6 +51,50 @@ class FfmpegSkillIntegrationTests(unittest.TestCase):
         self.assertIn(d["checks"]["device"]["status"], ("OK", "CPU_ONLY", "UNKNOWN"))
         self.assertEqual(d["status"], "degraded")
         self.assertEqual((rc, cli_doc["status"]), (0, d["status"]))
+
+
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class GenerateBgmIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        ckpt = fake_checkpoints(os.path.join(self.dir, "ckpt"))
+        for cm in (env(**no_engines_env(self.dir)), env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=ckpt)):
+            cm.__enter__()
+            self.addCleanup(cm.__exit__, None, None, None)
+        engine_cm = fake_acestep_engine(self.dir)
+        self.fake = engine_cm.__enter__()
+        self.addCleanup(engine_cm.__exit__, None, None, None)
+
+    def cli(self, name, *extra):
+        out = os.path.join(self.dir, name)
+        return out, run_cli("generate-bgm", "--prompt", "calm piano bed", "--tags", "ambient,70 bpm", "--duration", "10.5",
+                            "-o", out, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json", *extra)
+
+    def test_bed_validated_by_the_real_probe_and_repeatable_by_seed(self):
+        out, (rc, doc) = self.cli("a.wav", "--seed", "2026")
+        self.assertEqual(rc, 0, doc)
+        facts = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR)).probe(out)
+        self.assertAlmostEqual(float(facts["duration"]), 10.5, delta=0.1)
+        self.assertEqual((facts["audio"]["sample_rate"], facts["audio"]["channels"]), (48000, 2))
+        self.assertEqual(doc["provenance"]["ffmpeg_skill"]["version"], FfmpegSkill.locate(str(FFMPEG_SKILL_DIR)).info().version)
+        self.assertEqual((doc["provenance"]["seed"], doc["provenance"]["engine"]["id"]), (2026, "acestep"))
+        self.assertEqual(doc["provenance"]["prompt"]["text"], "calm piano bed, ambient, 70 bpm")
+        _, (rc2, doc2) = self.cli("b.wav", "--seed", "2026")
+        _, (rc3, doc3) = self.cli("c.wav", "--seed", "2027")
+        self.assertEqual((rc2, rc3), (0, 0))
+        self.assertEqual(doc2["output"]["sha256"], doc["output"]["sha256"])
+        self.assertNotEqual(doc3["output"]["sha256"], doc["output"]["sha256"])
+        self.assertEqual(sorted(os.listdir(self.dir)), sorted(["a.wav", "b.wav", "c.wav", "ckpt", "site",
+                                                               "fake_acestep_calls.jsonl"]))
+
+    def test_a_bed_of_the_wrong_length_is_refused_by_the_real_probe(self):
+        self.fake["set_mode"]("short")
+        out, (rc, doc) = self.cli("short.wav", "--seed", "1")
+        self.assertEqual((rc, doc["error"]["code"]), (4, "INVALID_RESULT"))
+        self.assertIn("duration", doc["error"]["message"])
+        self.assertFalse(os.path.exists(out))
 
 
 if __name__ == "__main__":
