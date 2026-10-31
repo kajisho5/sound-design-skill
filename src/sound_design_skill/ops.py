@@ -1,6 +1,6 @@
 """The ops. GENERATE_BGM (roadmap step 2, ADR-004): a music bed from a prompt and / or tags, a target duration and a
 seed, written as a WAV with its provenance. GENERATE_SFX (step 3, ADR-006): the same frame for a sound effect, on
-EzAudio (ADR-005). Library mode (step 4) comes later.
+EzAudio (ADR-005). Library mode (step 4, ADR-008) is library.py: no engine, the user's own files.
 
 GENERATE_BGM, step by step (the frame of voice-enhance-skill's ops: checks first, the engine in the worker, the result
 validated through ffmpeg-skill, then one rename):

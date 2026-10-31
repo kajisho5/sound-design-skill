@@ -2,6 +2,21 @@
 
 ## 0.1.0 - unreleased
 
+Library mode (roadmap step 4, ADR-008): your own BGM / SFX files with a declared licence, no engine.
+
+- `sound-design library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx [--tags] [--mood] [--loopable] [--source] [--author] [--credit] [--name] [--no-loudness] [--overwrite] --json`. A missing, empty or placeholder (`unknown`, `n/a`, ...) licence is refused first, with the new error `LICENCE_REQUIRED` (exit 2, not retryable; message in English and Japanese). The file must be audio only by ffmpeg-skill `probe`; its loudness is measured by `loudness --measure-only`. It is copied into the library (verified by SHA-256, one rename) or registered in place, and its entry is written to `sound-library.json`. Result schema `sound-design/library-import@1`; `audio.library_import` is `EXPERIMENTAL`.
+- `sound-library.json` (schema `sound-design/library@1`) at the library root: per file, keyed by its library-relative path in Unicode NFC, the declared `licence`, `kind`, `tags`, `mood`, `loopable`, `source`, `author`, `credit`, plus what the import measured. Read as UTF-8 with an optional BOM, written as UTF-8.
+- `sound-design library-index <dir> [--loudness] --json` (read-only, schema `sound-design/library-index@1`): every audio file with its licence (`declared`, or `unknown` for a file without a declared licence), kind, tags, mood and the duration from ffmpeg-skill `probe`, optionally the EBU R128 loudness. It also reports unreadable files, files changed since import, missing files and a summary.
+- `sound-design library-pick <dir> -o out.wav --kind bgm|sfx [--tags] [--mood] [--duration] [--file] [--crossfade 0.5] [--overwrite] --json` (schema `sound-design/library-pick@1`):
+  - deterministic choice: declared licence, kind, >= 1 matched tag / mood, audio only, fittable; ranked by matches, fit (none < trim < loop), length difference, path, SHA-256; every exclusion listed with its reason;
+  - fit through ffmpeg-skill: used whole within max(0.1 s, 1 %) (PCM WAV copied as is, other formats converted by `cut --accurate`); trimmed by `cut --accurate`; looped (files marked `loopable` only) by `join` with a crossfade of at most a quarter of the file, then `cut`; at most 64 copies;
+  - the WAV is validated by `probe` and measured by `loudness --measure-only` (never normalised), then placed with one rename;
+  - provenance: source file and SHA-256, the licence as declared (`verified: false`), selection rule and query, fit, `engine: null`, `ai_generated: false`.
+- Licences are never inferred or cleared: unknown stays `unknown`. Warnings flag a non-commercial term, a no-derivatives term on a fitted file, and a CC BY licence without a credit.
+- No engine in library mode: `library.py` imports none, and the tests patch every engine entry point (EzAudio and ACE-Step) to fail. The EzAudio confirmation (ADR-007) is unchanged. Contract (`policy.library_licence`, `policy.library_engine`, the `library-index` and `library-pick` tools, `provenance.library_fields`, `handoff.library`) and doctor (`checks.operations.library`) say so.
+- ffmpeg-skill tools used: `probe`, `cut`, `join`, `loudness` (each checked flag by flag against the live contract). ffmpeg-skill is not changed. Gaps found (ADR-008): `loop` refuses audio-only input, and `join --transition fade --duration 0` does not join end to end.
+- Tests: `tests/test_library.py` covers licence reporting, fitting maths, deterministic selection, indexing (Japanese, NFD / NFC), import, pick, the provenance, engine isolation, and a cp1252 console. One integration test runs import, index, trim, loop, FLAC conversion and refusal through the real ffmpeg-skill with WAVs written by the test.
+
 EzAudio needs the user's acknowledgement first (ADR-007, the owner's decision: "whenever EzAudio is used, tell me first").
 
 - `generate-sfx` on the `ezaudio` engine refuses to run without `--acknowledge-ezaudio-training-data` (`SfxRequest.acknowledge_ezaudio_training_data`). The refusal comes after the pure argument and output checks and before any engine inspection, ffmpeg-skill call or worker.

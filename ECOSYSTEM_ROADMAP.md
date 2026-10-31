@@ -13,8 +13,8 @@ Scaffold: one-line README. Engine in ecosystem.json: ACE-Step 1.5 (MIT, commerci
 
 | Owned job | Status | Note |
 |---|---|---|
-| BGM生成 | experimental | GENERATE_BGM (ACE-Step 1.5), step 2 |
-| 効果音 | experimental | GENERATE_SFX (EzAudio), step 3 |
+| BGM生成 | experimental | GENERATE_BGM (ACE-Step 1.5), step 2; or the user's own file through library mode, step 4 |
+| 効果音 | experimental | GENERATE_SFX (EzAudio), step 3; or the user's own file through library mode, step 4 |
 
 ## Wiring
 
@@ -28,7 +28,7 @@ None. Generated assets should be placed through audio-production MIX (it owns �
   - Done when: duration within tolerance; seed determinism (verify on the engine)
 - [x] **3. SFX engine ADR + GENERATE_SFX** ([#5](https://github.com/kajisho5/sound-design-skill/pull/5), [docs/decisions.md](docs/decisions.md) ADR-005, ADR-006; EzAudio chosen: MIT code and weights, flan-t5-xl Apache-2.0, no output terms stated, its YouTube training audio recorded as a warning in every result; Stable Audio Open rejected (Community License caps commercial use at USD 1M revenue), AudioLDM2 rejected (CC BY-NC-SA code and weights), ten more checked; `sound-design generate-sfx` through EzAudio's Python API as read from its source, no download path reachable, WAV validated through ffmpeg-skill probe; tested with a fake engine, real-engine measurements are an ADR-006 follow-up; by the owner's decision EzAudio runs only with `--acknowledge-ezaudio-training-data`, else `CONFIRMATION_REQUIRED`, the acknowledgement recorded in the provenance and exposed in contract and doctor: [#6](https://github.com/kajisho5/sound-design-skill/pull/6), ADR-007) — candidates to verify: Stable Audio Open, AudioLDM2 (licences)
   - Done when: ADR + tests
-- [ ] **4. Library mode** — import user BGM/SFX with a licence field
+- [x] **4. Library mode** ([#7](https://github.com/kajisho5/sound-design-skill/pull/7), [docs/decisions.md](docs/decisions.md) ADR-008; no engine (never ACE-Step or EzAudio, nothing downloaded): `sound-design library-import` refuses a missing licence with `LICENCE_REQUIRED` and records the declared licence, kind, tags, mood and measurements in `sound-library.json`; `library-index` reports every file's licence as declared or `unknown` (never cleared) with its duration / loudness measured by ffmpeg-skill; `library-pick` chooses deterministically, trims or loops through ffmpeg-skill cut / join, validates with probe and records source SHA-256, licence and fit in the provenance) — import user BGM/SFX with a licence field
   - Done when: refuses a missing licence
 - [ ] **5. SKILL.md, CI; (agent side) BGM -> MIX**
   - Done when: end-to-end plan

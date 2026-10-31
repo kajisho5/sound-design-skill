@@ -88,11 +88,13 @@ class ContractTests(unittest.TestCase):
         for p in c["provides"]:
             self.assertEqual(set(p), {"id", "lifecycle", "tool_id"})
             self.assertIn(p["tool_id"], tool_ids)
-        # GENERATE_BGM is implemented since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006); library mode (step 4) is not
+        # GENERATE_BGM is implemented since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006), library mode since step 4
+        # (ADR-008)
         self.assertEqual({p["id"]: p["lifecycle"] for p in c["provides"]},
-                         {"audio.bgm_generate": "EXPERIMENTAL", "audio.sfx_generate": "EXPERIMENTAL", "audio.library_import": "PROPOSED"})
-        self.assertEqual({t["tool_id"]: t["implemented"] for t in c["tools"] if t["role"] in ("generation", "ingest")},
-                         {"sound-design/generate-bgm": True, "sound-design/generate-sfx": True, "sound-design/library-import": False})
+                         {"audio.bgm_generate": "EXPERIMENTAL", "audio.sfx_generate": "EXPERIMENTAL", "audio.library_import": "EXPERIMENTAL"})
+        self.assertEqual({t["tool_id"]: t["implemented"] for t in c["tools"] if t["role"] in ("generation", "ingest", "selection")},
+                         {"sound-design/generate-bgm": True, "sound-design/generate-sfx": True, "sound-design/library-import": True,
+                          "sound-design/library-pick": True})
         sfx = next(t for t in c["tools"] if t["tool_id"] == "sound-design/generate-sfx")
         self.assertEqual((sfx["schema"], sfx["engine"], sfx["engines"], sfx["deterministic"]), (SFX_SCHEMA, "ezaudio", ["ezaudio"], False))
         self.assertIn("YouTube", sfx["output_warning"])
@@ -133,7 +135,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("ADR-005", c["engines"]["selection_adr"])
         ff = next(d for d in c["dependencies"] if d["id"] == "ffmpeg-skill")
         self.assertEqual(ff["flags"], {t: list(f) for t, f in FLAGS_USED.items()})
-        self.assertEqual(ff["tools"], ["probe"])
+        self.assertEqual(ff["tools"], ["probe", "cut", "join", "loudness"])     # cut / join / loudness: library mode (ADR-008)
         self.assertEqual(len(c["device"]["acestep_tiers"]), len(device.ACESTEP_TIERS))
         self.assertEqual(set(CAPABILITY_IDS), {"bgm", "sfx", "library"})
 
@@ -1287,6 +1289,10 @@ class DoctorTests(unittest.TestCase):
         sfx = d["checks"]["operations"]["sfx"]
         self.assertEqual((sfx["implemented"], sfx["engine"], sfx["engine_status"], sfx["roadmap_step"]), (True, "ezaudio", "MISSING", 3))
         self.assertNotIn("note", sfx)
+        lib_op = d["checks"]["operations"]["library"]                     # ADR-008: no engine, no confirmation
+        self.assertEqual((lib_op["implemented"], lib_op["engine"], lib_op["roadmap_step"], lib_op["confirmation_required"]),
+                         (True, None, 4, False))
+        self.assertIn("never ACE-Step or EzAudio", lib_op["note"])
         # ADR-007: doctor tells an orchestrator that SFX on EzAudio is a CONFIRM step, why, and the flag
         self.assertIs(sfx["confirmation_required"], True)
         self.assertEqual((sfx["confirmation"]["flag"], sfx["confirmation"]["approval"]), (ezaudio.ACK_FLAG, "CONFIRM"))

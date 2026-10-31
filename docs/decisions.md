@@ -389,3 +389,73 @@ The owner decided: "whenever EzAudio is used, tell me first." So the user must h
 - It does not check that a person actually saw the message. The flag is the caller's statement that the user was told; the provenance records that statement and its time.
 - It does not change ADR-005: EzAudio stays the SFX engine, and `output_warning` stays in every result's `warnings`.
 - video-production-agent is not changed here. It reads `confirmation_required` from the contract or doctor and turns it into a CONFIRM decision on its side.
+
+## ADR-008 Library mode: the user's own files with a declared licence, chosen deterministically, fitted and measured through ffmpeg-skill, no engine
+
+### Context
+
+Roadmap step 4: "import user BGM/SFX with a licence field", done when it "refuses a missing licence". ADR-002 declared the capability `audio.library_import` (tool `library-import`) as `PROPOSED`. Library mode is the non-AI path: music beds and effects the user already has (bought packs, commissioned tracks, CC0 / CC BY downloads) instead of ACE-Step or EzAudio output. The owner set three rules for it:
+- EzAudio is never used or invoked by library mode, and nothing is downloaded. The EzAudio confirmation gate (ADR-007) is not touched.
+- A file whose licence is unknown is reported as unknown and is never presented as cleared. No licence data is invented.
+- Durations and loudness are measured through ffmpeg-skill, not assumed. ffmpeg-skill is finished and is not changed.
+
+A file says nothing reliable about its own licence. Tags in a WAV or MP3 are optional and often wrong, and reading them would be guessing. The user has to declare it, and the skill has to keep that declaration apart from anything it measures.
+
+### Decision
+
+- **No engine.** `library.py` imports no engine, no worker and no network module. A unit test scans its source for them. Every library test patches every engine entry point (`ops.run_engine`, `ops.select_engine`, `ops.require_confirmation`, `service.run_engine`, `EzAudioEngine.inspect` / `process`, `AceStepEngine.inspect` / `process`) to fail if reached. Results and provenance say `engine: null`, and the provenance says `ai_generated: false`. Contract (`policy.library_engine`, each library tool's `engine: null`, `engines: []`) and doctor (`checks.operations.library`: `engine: null`, `confirmation_required: false`, a note) publish it.
+- **The library is a folder plus one manifest.** `sound-library.json` at the folder's root, schema `sound-design/library@1`:
+  - `files` is keyed by the library-relative path, `/`-separated, in Unicode NFC. macOS hands out NFD names; a manifest typed on Windows or Linux is NFC; both sides are normalised, so `ドア.wav` matches either way.
+  - Each entry holds what the user declares: `licence`, `kind` (`bgm` / `sfx`), `tags`, `mood`, `loopable`, `source`, `author`, `credit`. `library-import` also records the facts it measured (`sha256`, `measured`: duration, codec, rate, channels, loudness), `imported_from` (a file name, never a path), `imported_at` and `imported_by`.
+  - It is read as UTF-8 with an optional byte-order mark (Windows Notepad) and written as UTF-8, not ASCII-escaped, because people read and edit it. It is written whole and replaced with one rename. ADR-003 still holds for every CLI document: those stay ASCII.
+  - Hidden files and folders (a leading `.`, including this skill's temporary files) and the manifest itself are not library files. Audio files are found by extension: `.wav .flac .mp3 .m4a .aac .ogg .oga .opus .aif .aiff .caf`.
+  One manifest per folder was chosen over a sidecar per file: one file to read, back up and review, and a library can be indexed in one pass.
+- **Licence honesty.** `licence_info` reports exactly what is declared:
+  - `licence` is the declared text, or `"unknown"` when the file has no entry, or its licence is missing, not text, empty or a placeholder word (`unknown`, `unspecified`, `none`, `n/a`, `?`, `tbd`, ...). `declared_as` keeps what was written.
+  - `status` is `declared` or `unknown`; `usable` follows it; `verified` is always `false`. The note says the licence is the user's declaration, and that this skill neither verifies nor clears licences (already in `not_provided`). The word "cleared" is never used for a file.
+  - Warnings state facts of the declared text, never a verdict: a non-commercial term (NC), a no-derivatives term (ND) when the file was trimmed or looped, and a Creative Commons attribution licence with no `credit` declared. A file that changed since its import (SHA-256) is flagged, because the licence was declared for the imported bytes.
+- **"Refuses a missing licence".** `library-import` checks the licence first, before the input, the library or ffmpeg-skill, and refuses a missing, empty or placeholder licence with the new error `LICENCE_REQUIRED`: exit code 2 (an input problem, like `INVALID_ARGUMENT`), not retryable. The message is English then Japanese, as `CONFIRMATION_REQUIRED` (ADR-007); `details` carries `message_en`, `message_ja`, `licence: "unknown"` and `declared_as`. `library-pick --file` refuses a file without a declared licence the same way. Without `--file`, such a file is never chosen and is listed under `excluded` with the reason. `library-index` lists it with `licence: "unknown"`.
+- **`library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx [--tags] [--mood] [--loopable] [--source] [--author] [--credit] [--name <relative path>] [--no-loudness] [--overwrite]`.**
+  - Order: licence, then arguments, then the input file and the library, then the destination, then ffmpeg-skill.
+  - The input must be audio only by `ffmpeg-skill/probe` (one audio stream, no picture, a duration). Its loudness is measured by `ffmpeg-skill/loudness --measure-only` unless `--no-loudness`.
+  - A file outside the library is copied in (verified by SHA-256, placed with one rename) and the input is never modified. A file already inside the library is registered where it is (`copied: false`); `--name` cannot move it.
+  - `--name` must be relative, inside the library and free of `..`.
+  - An existing file or manifest entry is replaced only with `--overwrite`.
+  - Schema `sound-design/library-import@1`. `audio.library_import` moves to `EXPERIMENTAL`.
+- **`library-index <dir> [--loudness]`.** Read-only. Every audio file, in path order, with its licence block, kind, tags, mood, loopable, SHA-256, the duration and stream facts measured by `ffmpeg-skill/probe`, and with `--loudness` its EBU R128 integrated loudness, true peak and LRA. Also listed: unreadable files, manifest entries whose file is gone, files changed since import, and a summary (files, declared, unknown licence, unreadable, missing). Schema `sound-design/library-index@1`.
+- **`library-pick <dir> -o <out.wav> --kind bgm|sfx [--tags] [--mood] [--duration <s>] [--file <relative path>] [--crossfade 0.5] [--overwrite]`.** Schema `sound-design/library-pick@1`.
+  - Eligible: in the manifest with a declared licence; of the requested kind; matching at least one requested tag or mood (NFKC + casefold, so `Calm`, `calm` and `ｃａｌｍ` match); audio only by `ffmpeg-skill/probe`; and fittable (below).
+  - Ranked by: more matched tags and moods first; then fit `none` < `trim` < `loop`; then the smaller |measured - requested| duration; then the library-relative path in code-point order; then the SHA-256. Nothing is random and nothing depends on the order the file system lists files in, so the same library and query give the same file. The result lists every ranked file and every excluded file with its reasons.
+  - `--file` skips the choice but not the licence, kind or fit checks.
+- **Fitting (`plan_fit`, pure).** The tolerance is GENERATE_BGM's: max(0.1 s, 1 %).
+  - `none`: no `--duration`, or the file is within the tolerance. A PCM WAV is copied byte for byte; any other format is converted to PCM WAV by `ffmpeg-skill/cut --accurate` over its whole length.
+  - `trim`: a longer file. The first `duration` seconds, by `ffmpeg-skill/cut --accurate` (sample-accurate, re-encoded to PCM). There is no fade: fades are mixing, which audio-production-skill MIX owns; the result warns that the cut is hard.
+  - `loop`: a shorter file, only when the manifest marks it `loopable`. `repeats` copies are joined by `ffmpeg-skill/join` with an audio crossfade x = min(`--crossfade`, a quarter of the file). repeats = max(2, ceil((target - x) / (source - x))), the fewest copies with repeats * source - (repeats - 1) * x >= target. Then the join is trimmed by `cut --accurate`. At most 64 copies. With x = 0, `join --transition none` is used.
+  - Refused: a shorter file that is not loopable, or one that needs more than 64 copies. With `--file` this is `INVALID_ARGUMENT`; otherwise the file is excluded with the reason.
+- **Validation and placement.** As GENERATE_BGM: the work happens in a private `.sound-design-*` directory beside the output. `ffmpeg-skill/probe` must find one audio stream and no picture, the source's sample rate, and the expected duration within the tolerance; anything else is `INVALID_RESULT`. `ffmpeg-skill/loudness --measure-only` measures the result; it is reported, never normalised (loudness targets are MIX's). One rename places the WAV; nothing is written to the output path otherwise. The output may not be a library file (`OUTPUT_IS_INPUT`), and the library is never modified by `library-pick` or `library-index`.
+- **Provenance (`build_library_provenance`).** `op: "library"`, `engine: null`, `ai_generated: false`, `source` (library-relative file, SHA-256, kind, tags, mood, loopable, measured facts), `licence` (the declared block, `verified: false`, credit), `selection` (rule, query, matched tags), `fit` (the plan), `duration` (requested, measured, tolerance), `output.sha256`, the ffmpeg-skill version, `network: false`. No absolute path is recorded. The result's `handoff` is audio-production-skill MIX, which places the WAV with its licence and credit.
+- **ffmpeg-skill.** `TOOLS_USED` grows from `probe` to `probe`, `cut`, `join` and `loudness`. Their flags are checked against the live contract like `probe`'s (capability detection), and all four declare `audio_only`. Nothing in ffmpeg-skill was changed.
+
+### ffmpeg-skill gaps found (ffmpeg-skill is not changed; recorded here)
+
+- `loop` refuses an audio-only input ("input has no video stream"; its contract has `audio_only: false`). Library mode loops with `join` (N copies of the same file, audio crossfade), then `cut`. `join` reports the repeated input as a `duplicate_inputs` warning, which is expected here.
+- `join --transition fade --duration 0` does not join end to end: two 3 s files gave 5.08 s, not 6 s. `--transition none` gives exactly 6 s, so a crossfade of 0 uses it.
+- `cut` without `--accurate` stream-copies a WAV at packet precision (1.259 s for 1.25 s). Library mode always passes `--accurate`.
+
+### What this does not do
+
+- It does not verify, look up or clear any licence, and it reads no licence from file tags. The declared text is carried as declared.
+- It does not normalise loudness, fade, duck or mix. MIX does.
+- It does not change GENERATE_BGM, GENERATE_SFX or the EzAudio confirmation (ADR-007).
+
+### Tests
+
+- Unit (`tests/test_library.py`, no FFmpeg; a stub ffmpeg-skill that cuts and joins PCM WAVs with the `wave` module):
+  - licence reporting: missing and placeholder licences are unknown, the declared text is kept, `verified` is false, the warnings, and `LICENCE_REQUIRED` in both languages;
+  - the fitting maths: the fewest repeats on a grid, the crossfade cap, exact multiples, the refusals;
+  - selection: exclusion reasons; rank order and tie-breaks; the same choice for every permutation of the input;
+  - indexing: Japanese names, an NFD file name against an NFC key, hidden and non-audio files, an unreadable file, a changed file, a missing file, a manifest with a BOM, invalid manifests, read-only;
+  - import: refusal before any ffmpeg-skill call, copy and manifest, registration in place, `--name` safety, `OUTPUT_EXISTS` / `--overwrite`;
+  - pick: loop, trim, whole-file copy, determinism, `--file` refusals, no eligible file, output checks, the provenance, the CLI;
+  - every engine entry point patched to fail; a static scan of `library.py`; contract and doctor fields; the `LICENCE_REQUIRED` CLI document on a cp1252 console with a Japanese file name (ADR-003).
+- Integration (real ffmpeg-skill and FFmpeg): WAVs written by the test under Japanese names in a Japanese-named library, plus a FLAC made by `ffmpeg-skill/cut`. Covered: refusal without a licence; import; index with loudness and one unknown file; trim to 7.5 s and loop to 10 s, both checked by the real `probe`; the same choice and SHA-256 twice; FLAC converted to WAV; a PCM WAV used as is; `--file` refused for the unknown file.

@@ -10,7 +10,12 @@ tool call, and placing BGM / SFX in the programme is audio-production-skill MIX 
 
 Which ffmpeg-skill tools are used, and for what (the roadmap's wiring):
   probe     duration and stream facts of a generated clip (GENERATE_BGM duration tolerance, step 2; GENERATE_SFX,
-            step 3) and of an imported library file (step 4)
+            step 3) and of a library file and a fitted library output (library mode, step 4, ADR-008)
+  cut       library mode: a sample-accurate trim (--accurate) of a library file to the requested duration, also the
+            conversion of a non-WAV library file to PCM WAV
+  join      library mode: N copies of a loopable library file joined with a crossfade, before the trim
+  loudness  library mode: --measure-only, the EBU R128 integrated loudness / true peak / LRA of a library file and of
+            the fitted output (measured and reported, never normalised here: loudness targets are MIX's)
 """
 from __future__ import annotations
 
@@ -26,11 +31,14 @@ from .procs import TIMEOUT_EXIT, run_process_group
 
 SUPPORTED_CONTRACT_VERSION = "1.0"   # reported, not gated on (ffmpeg-skill kept "1.0" across 0.x-2.x)
 ENV_DIR_KEYS = ("SOUND_DESIGN_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
-TOOLS_USED = ("probe",)
+TOOLS_USED = ("probe", "cut", "join", "loudness")
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "probe": ("inputs",),
+    "cut": ("input", "output", "start", "duration", "accurate", "json"),
+    "join": ("inputs", "output", "duration", "transition", "json"),
+    "loudness": ("input", "measure_only", "json"),
 }
-AUDIO_ONLY_TOOLS = ("probe",)
+AUDIO_ONLY_TOOLS = ("probe", "cut", "join", "loudness")
 
 
 @dataclass
@@ -154,6 +162,46 @@ class FfmpegSkill:
             raise SoundDesignError("UNSUPPORTED_MEDIA", f"ffmpeg-skill/probe could not read {os.path.basename(path)}: {tail}",
                                     {"tool": "ffmpeg-skill/probe", "exit_code": code})
         return data
+
+    def _tool(self, name: str, args: List[str], timeout: Optional[float]) -> Dict[str, Any]:
+        """One ffmpeg-skill editing tool with --json; its document must say status "completed". Paths in `args` are
+        absolute (the tool runs with the checkout as its working directory)."""
+        code, out, err = self._run([self.script(name), *args, "--json"], timeout or self.timeout)
+        doc = _parse_json(out)
+        if code != 0 or doc.get("status") != "completed":
+            error = doc.get("error") if isinstance(doc.get("error"), dict) else {}
+            tail = error.get("message") or (err.strip().splitlines()[-1] if err.strip() else "no output")
+            raise SoundDesignError("TOOL_ERROR", f"ffmpeg-skill/{name} failed: {tail}",
+                                   {"tool": f"ffmpeg-skill/{name}", "exit_code": code, "error": error or None})
+        return doc
+
+    def cut(self, src: str, dst: str, duration: float, start: float = 0.0, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """A sample-accurate trim (always re-encoded: --accurate), written to `dst` (its extension picks the format)."""
+        return self._tool("cut", [os.path.abspath(src), "--start", f"{start:.6f}", "--duration", f"{duration:.6f}",
+                                  "--accurate", "-o", os.path.abspath(dst)], timeout)
+
+    def join(self, inputs: List[str], dst: str, crossfade: float, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Inputs joined in order, with an audio crossfade of `crossfade` seconds between them (`--transition none`
+        when it is 0: ffmpeg-skill's fade transition at --duration 0 does not join end to end)."""
+        args = [os.path.abspath(p) for p in inputs]
+        args += ["--transition", "none"] if crossfade <= 0 else ["--transition", "fade", "--duration", f"{crossfade:.6f}"]
+        return self._tool("join", args + ["-o", os.path.abspath(dst)], timeout)
+
+    def loudness(self, path: str, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """EBU R128 measurement only (`--measure-only`): integrated LUFS, true peak dBTP and LRA, as numbers (None when
+        ffmpeg reports none, e.g. -inf on a clip too short or silent to gate)."""
+        doc = self._tool("loudness", [os.path.abspath(path), "--measure-only"], timeout)
+        m = doc.get("measured") if isinstance(doc.get("measured"), dict) else {}
+        return {"integrated_lufs": _number(m.get("input_i")), "true_peak_dbtp": _number(m.get("input_tp")),
+                "lra_lu": _number(m.get("input_lra")), "tool": "ffmpeg-skill/loudness --measure-only"}
+
+
+def _number(value: Any) -> Optional[float]:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
 def _parse_json(text: str) -> Dict[str, Any]:

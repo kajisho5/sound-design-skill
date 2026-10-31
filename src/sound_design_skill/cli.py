@@ -10,8 +10,11 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   sound-design generate-bgm --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-004)
   sound-design generate-sfx --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N]
                             --acknowledge-ezaudio-training-data --json                                  (ADR-006, ADR-007)
-
-library-import is declared PROPOSED and arrives in roadmap step 4."""
+  sound-design library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx [--tags a,b] --json (ADR-008)
+  sound-design library-index <dir> [--loudness] --json                                                   (ADR-008)
+  sound-design library-pick <dir> -o <out.wav> --kind bgm|sfx [--tags a,b] [--mood m] [--duration <s>] --json
+                                                                                                         (ADR-008)
+Library mode runs no engine (never ACE-Step or EzAudio) and refuses a file without a declared licence."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +27,9 @@ from .contract import contract
 from .doctor import doctor, engines_report
 from .engines.acestep import DEVICES
 from .errors import SoundDesignError
+from .library import (DEFAULT_CROSSFADE, LibraryImportRequest, LibraryIndexRequest, LibraryPickRequest, library_import,
+                      library_index, library_pick)
+from .library import DEFAULT_TIMEOUT as LIBRARY_TIMEOUT
 from .ops import SFX_DEVICES, SFX_TIMEOUT, BgmRequest, SfxRequest, generate_bgm, generate_sfx
 from .service import DEFAULT_TIMEOUT
 
@@ -73,6 +79,47 @@ def build_parser() -> argparse.ArgumentParser:
                    help="required with the ezaudio engine: the user was told that EzAudio was trained on YouTube audio "
                         "not licensed for training (ADR-007); recorded with its time in the provenance")
     s.add_argument("--json", action="store_true")
+    li = sub.add_parser("library-import", help="register your own BGM / SFX file in a library folder with its licence "
+                                               "(refused without one; no engine)")
+    li.add_argument("file", help="the audio file (never modified)")
+    li.add_argument("--library", required=True, help="the library folder (holds sound-library.json)")
+    li.add_argument("--licence", "--license", dest="licence", help="required: the licence as you know it, an SPDX id "
+                    "(CC-BY-4.0, CC0-1.0) or the licence text / name you bought it under; \"unknown\" is refused")
+    li.add_argument("--kind", choices=("bgm", "sfx"), required=True)
+    li.add_argument("--tags", type=_tag_list, default=[], help="comma-separated tags, e.g. \"piano,corporate\"")
+    li.add_argument("--mood", type=_tag_list, default=[], help="comma-separated moods, e.g. \"calm,bright\"")
+    li.add_argument("--loopable", action="store_true", help="the file loops cleanly (library-pick may repeat it)")
+    li.add_argument("--source", help="where it came from (URL or text)")
+    li.add_argument("--author", help="author / composer")
+    li.add_argument("--credit", help="the credit line the licence asks for")
+    li.add_argument("--name", help="path inside the library (default: the file name)")
+    li.add_argument("--no-loudness", dest="loudness", action="store_false", help="skip the loudness measurement")
+    li.add_argument("--overwrite", action="store_true", help="replace a file or manifest entry already in the library")
+    li.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    li.add_argument("--timeout", type=float, default=LIBRARY_TIMEOUT, help=f"per ffmpeg-skill tool (default {LIBRARY_TIMEOUT:g} s)")
+    li.add_argument("--json", action="store_true")
+    lx = sub.add_parser("library-index", help="every audio file in a library folder with its licence status and "
+                                              "measured duration (read-only)")
+    lx.add_argument("library", help="the library folder")
+    lx.add_argument("--loudness", action="store_true", help="also measure each file's EBU R128 loudness")
+    lx.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    lx.add_argument("--timeout", type=float, default=LIBRARY_TIMEOUT, help=f"per ffmpeg-skill tool (default {LIBRARY_TIMEOUT:g} s)")
+    lx.add_argument("--json", action="store_true")
+    lp = sub.add_parser("library-pick", help="choose a library file by kind / tags / mood, fit it to a duration (trim "
+                                             "or loop) and write a WAV with its provenance (no engine)")
+    lp.add_argument("library", help="the library folder")
+    lp.add_argument("-o", "--output", required=True, help="output .wav (refused if it exists, unless --overwrite)")
+    lp.add_argument("--kind", choices=("bgm", "sfx"))
+    lp.add_argument("--tags", type=_tag_list, default=[], help="comma-separated tags; at least one must match")
+    lp.add_argument("--mood", type=_tag_list, default=[], help="comma-separated moods; counted with the tags")
+    lp.add_argument("--duration", type=float, help="target seconds (default: the file's own length)")
+    lp.add_argument("--file", help="use this library file (path inside the library) instead of choosing")
+    lp.add_argument("--crossfade", type=float, default=DEFAULT_CROSSFADE,
+                    help=f"seconds between loop repeats (default {DEFAULT_CROSSFADE:g}; at most a quarter of the file)")
+    lp.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
+    lp.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    lp.add_argument("--timeout", type=float, default=LIBRARY_TIMEOUT, help=f"per ffmpeg-skill tool (default {LIBRARY_TIMEOUT:g} s)")
+    lp.add_argument("--json", action="store_true")
     return ap
 
 
@@ -119,6 +166,27 @@ def _human(doc: Dict[str, Any]) -> None:
         if doc.get("confirmation"):
             c = doc["confirmation"]
             print(f"  acknowledged: {c['flag']} at {c['acknowledged_at']}")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/library-import@1"):
+        lic = doc["licence"]
+        print(f"{doc['file']['key']}: {doc['file']['measured']['duration']:.2f}s; licence {lic['licence']} ({lic['status']}, "
+              f"not verified); {'copied into' if doc['file']['copied'] else 'registered in'} {doc['library']['path']}")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/library-index@1"):
+        for f in doc["files"]:
+            m = f.get("measured") or {}
+            dur = f"{m['duration']:.2f}s" if m.get("duration") else "unreadable"
+            print(f"{f['file']}: {dur}; {f.get('kind') or '-'}; licence {f['licence']['licence']}")
+        sm = doc["summary"]
+        print(f"  {sm['files']} files, {sm['declared']} with a declared licence, {sm['unknown_licence']} unknown (not used)")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/library-pick@1"):
+        out = doc["output"]
+        print(f"{out['path']}: {out['duration']:.2f}s from {doc['source']['file']} ({doc['fit']['mode']}); licence "
+              f"{doc['licence']['licence']} (declared, not verified)")
         for w in doc.get("warnings") or []:
             print(f"  warning: {w}")
     elif "engines" in doc and "skill_id" not in doc:
@@ -168,6 +236,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                                           overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
                                           offline=args.offline,
                                           acknowledge_ezaudio_training_data=args.acknowledge_ezaudio_training_data)), as_json)
+            return 0
+        if args.cmd == "library-import":
+            _emit(library_import(LibraryImportRequest(input_path=args.file, library_dir=args.library, licence=args.licence,
+                                                      kind=args.kind, tags=args.tags, mood=args.mood, loopable=args.loopable,
+                                                      source=args.source, author=args.author, credit=args.credit,
+                                                      name=args.name, loudness=args.loudness, overwrite=args.overwrite,
+                                                      ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
+            return 0
+        if args.cmd == "library-index":
+            _emit(library_index(LibraryIndexRequest(library_dir=args.library, loudness=args.loudness,
+                                                    ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
+            return 0
+        if args.cmd == "library-pick":
+            _emit(library_pick(LibraryPickRequest(library_dir=args.library, output_path=args.output, kind=args.kind,
+                                                  tags=args.tags, mood=args.mood, duration=args.duration, file=args.file,
+                                                  crossfade=args.crossfade, overwrite=args.overwrite,
+                                                  ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
             return 0
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)
