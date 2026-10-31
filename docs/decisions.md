@@ -340,3 +340,52 @@ Read only, from haidog-yaqub/EzAudio at commit `86f18268117dde73bb274401c610e639
 
 - On a machine with EzAudio and its weights: generate the same (prompt, length, seed) twice per device and compare SHA-256; record the measured duration, the peak GPU memory and the time. Then set `deterministic`, `min_vram_gb` and the tolerance from those measurements.
 - Step 5 (SKILL.md, CI): an engines job that runs the real EzAudio if a runner with the weights is available.
+
+## ADR-007 EzAudio runs only after the user is told: `--acknowledge-ezaudio-training-data`, `CONFIRMATION_REQUIRED`, recorded in the provenance
+
+### Context
+
+ADR-005 chose EzAudio for SFX. Its code and weights are MIT, but it was trained on AudioSet, VGGSound and AudioCaps: YouTube clips whose audio was not licensed for training. ADR-005 and ADR-006 record this as `engine.training_data` and `engine.output_warning` in every result and provenance. A warning arrives only after the effect is made, though, and an orchestrator can pass it on unread.
+
+The owner decided: "whenever EzAudio is used, tell me first." So the user must hear the caveat before EzAudio runs, not after.
+
+### Decision
+
+- **The engine declares it.** `EngineSpec` gains `confirmation_flag`, `confirmation_reason` and `confirmation_reason_ja`. `confirmation_required` is true when a flag is set, and `to_dict()` publishes it.
+  - EzAudio sets `confirmation_flag = "--acknowledge-ezaudio-training-data"`.
+  - ACE-Step sets none.
+  - The check reads the spec, so a future engine opts in the same way.
+- **The flag.** `generate-sfx --acknowledge-ezaudio-training-data` (`SfxRequest.acknowledge_ezaudio_training_data`). It follows the CLI's existing style (`--overwrite`, `--offline`): a long kebab-case `store_true` flag. It names the engine and the subject, so passing it states what was acknowledged. Only the boolean `True` counts in the library API.
+- **Refusal before any work.** Without the flag, GENERATE_SFX on EzAudio ends with the new error `CONFIRMATION_REQUIRED`. The order of checks becomes:
+  1. arguments (pure checks);
+  2. output path (pure checks);
+  3. **confirmation** (`ops.require_confirmation`, new);
+  4. engine inspection;
+  5. ffmpeg-skill.
+
+  Steps 1 and 2 stay first, so the user is never asked about a call that would fail anyway. The confirmation comes before the engine is inspected, ffmpeg-skill is located, the worker starts or anything is written, so a missing engine or ffmpeg-skill is reported only after the user has agreed.
+- **The error.** `CONFIRMATION_REQUIRED` has exit code 8 (its own code, so a caller can branch without parsing JSON) and is not retryable: the same call fails again until the flag is added.
+  - `message` is the English text, a newline, then the Japanese text. Each states the training-data caveat and the exact flag to add.
+  - `details` carries `engine`, `op`, `flag`, `message_en`, `message_ja`, `training_data`, `approval: "CONFIRM"` and `adr`.
+- **Provenance.** With the flag, `provenance.confirmation` (and the result's `confirmation`) is `{"required": true, "engine": "ezaudio", "flag", "acknowledged": true, "acknowledged_at": "<UTC, ISO 8601>", "reason", "adr"}`.
+  - `acknowledged_at` is taken when the check passes, before the engine runs.
+  - `engine.confirmation_required` joins the provenance engine fields.
+  - For BGM `provenance.confirmation` is `null`.
+- **Contract and doctor say so up front.** An orchestrator (video-production-agent) learns the requirement without running the op.
+  - Every generation tool in `contract --json` and every op in `doctor --json` (`checks.operations.<op>`) gains `confirmation_required` and `confirmation`. For SFX: `{"engine", "flag", "reason", "reason_ja", "error_code": "CONFIRMATION_REQUIRED", "approval": "CONFIRM", "adr"}`.
+  - The SFX `argv` lists the flag without brackets, because it is required.
+  - `policy.confirmation` describes the protocol: surface a CONFIRM step, tell the user `confirmation.reason`, and pass the flag only after the user agrees.
+  - `engines.registered.<id>.confirmation_required` mirrors the spec.
+  - Human `doctor` output prints a "confirm first" line under the op.
+- **Tests.**
+  - Unit: without the flag (and with a non-boolean value), the refusal comes before `select_engine`, `EzAudioEngine.inspect`, `usable_skill`, `FfmpegSkill.locate` and `run_engine` (all patched to fail if reached). The fake engine logs no call, the stub ffmpeg-skill probes nothing, and no file or run directory is left.
+  - Unit: the message text in both languages; the CLI's exit code 8 as JSON and as human output; the confirmation coming before a missing engine or ffmpeg-skill.
+  - Unit: success with the flag; the provenance record and its time window; contract and doctor fields.
+  - Integration (real ffmpeg-skill): refusal without the flag; acknowledgement recorded with it.
+  - Every existing SFX test now passes the flag; none was loosened.
+
+### What this does not do
+
+- It does not check that a person actually saw the message. The flag is the caller's statement that the user was told; the provenance records that statement and its time.
+- It does not change ADR-005: EzAudio stays the SFX engine, and `output_warning` stays in every result's `warnings`.
+- video-production-agent is not changed here. It reads `confirmation_required` from the contract or doctor and turns it into a CONFIRM decision on its side.

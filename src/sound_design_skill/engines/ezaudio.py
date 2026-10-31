@@ -2,7 +2,8 @@
 waveform-VAE latent with a Flan-T5 text encoder, 1-10 s. Code MIT (haidog-yaqub/EzAudio LICENSE), weights MIT
 (Hugging Face OpenSound/EzAudio model card), text encoder google/flan-t5-xl Apache-2.0. No licence or card says
 anything about the output; MIT does not restrict it. The training data is AudioSet, VGGSound and AudioCaps (YouTube
-clips, arXiv 2409.10819 section I-II), third-party audio: recorded in every provenance (TRAINING_DATA, OUTPUT_WARNING).
+clips, arXiv 2409.10819 section I-II), third-party audio: recorded in every provenance (TRAINING_DATA, OUTPUT_WARNING),
+and GENERATE_SFX refuses to run it until the caller passes ACK_FLAG (ADR-007, the owner's decision).
 
 EzAudio is a git checkout, not a distribution: `api/ezaudio.py` is imported from the checkout root, and it reads its
 model config relative to the working directory (`ckpts/ezaudio-xl.yml`). Looked up, never imported by doctor: the
@@ -69,6 +70,14 @@ TRAINING_DATA = ("AudioSet, VGGSound and AudioCaps (arXiv 2409.10819: DiT stages
 OUTPUT_WARNING = ("EzAudio was trained on YouTube audio (AudioSet / VGGSound / AudioCaps); its licences (MIT) do not "
                   "restrict the output, but the rights in the training audio were not licensed: listen to the effect "
                   "before publishing (ADR-005)")
+# The owner's decision (ADR-007): EzAudio never runs until the caller says the user was told about its training data.
+ACK_FLAG = "--acknowledge-ezaudio-training-data"
+CONFIRMATION_REASON = ("EzAudio was trained on AudioSet, VGGSound and AudioCaps, YouTube clips whose audio was not "
+                       "licensed for training by its owners. Its MIT licence does not restrict the output, but the "
+                       "owner decided to be told before every use of EzAudio (ADR-007).")
+CONFIRMATION_REASON_JA = ("EzAudio は AudioSet・VGGSound・AudioCaps で学習されています。これらは YouTube の音声で、"
+                          "持ち主から学習用の許諾を得ていません。MIT ライセンスは出力を制限しませんが、EzAudio を使う前に"
+                          "毎回ユーザーに伝えると決めています（ADR-007）。")
 
 SPEC = EngineSpec(
     id="ezaudio",
@@ -101,6 +110,9 @@ SPEC = EngineSpec(
     roadmap_step=3,
     licence_checked="2026-10-31 (docs/decisions.md ADR-005)",
     output_warning=OUTPUT_WARNING,
+    confirmation_flag=ACK_FLAG,
+    confirmation_reason=CONFIRMATION_REASON,
+    confirmation_reason_ja=CONFIRMATION_REASON_JA,
     licence_notes=(
         "EzAudio downloads a missing checkpoint itself (EzAudio.download_ckpt); this skill passes both checkpoint "
         "paths, replaces download_ckpt with a refusal and blocks every non-loopback socket in the worker (ADR-006)",

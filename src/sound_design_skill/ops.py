@@ -23,18 +23,21 @@ Nothing is written to the output path unless every step passes.
 GENERATE_SFX runs the same eight steps with these differences: no lyrics; the prompt is < 512 characters (EzAudio's
 T5 encoder reads at most 100 tokens and the result warns when the prompt is certainly longer); the duration is a
 whole number of seconds inside the engine's range (EzAudio: 1-10 s); the device is auto / cuda / cpu; the engine's
-output warning (EzAudio: its training audio) is copied into every result."""
+output warning (EzAudio: its training audio) is copied into every result. Between steps 2 and 3 an engine that needs
+the user's confirmation (EzAudio, ADR-007) is refused with CONFIRMATION_REQUIRED unless the caller passed its flag
+(--acknowledge-ezaudio-training-data); the acknowledgement and its time go into the provenance."""
 from __future__ import annotations
 
 import os
 import secrets
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import SKILL_ID, __version__
-from .engines import DEFAULT_ENGINE, engines_for, get_engine
+from .engines import DEFAULT_ENGINE, confirmation_for, engines_for, get_engine
 from .engines import ezaudio
 from .engines.acestep import DEVICES, MAX_CAPTION, MAX_LYRICS
 from .engines.base import OK, Engine, EngineRequest
@@ -82,6 +85,7 @@ class SfxRequest:
     overwrite: bool = False
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
+    acknowledge_ezaudio_training_data: bool = False   # --acknowledge-ezaudio-training-data (ADR-007)
 
 
 def caption_from(prompt: Optional[str], tags: List[str]) -> str:
@@ -165,6 +169,26 @@ def select_engine(op: str, engine_id: Optional[str], offline: bool = False) -> T
         raise SoundDesignError(code, f"engine {eid!r} is {report['status']}: {report.get('detail')}",
                                {"engine": eid, "status": report["status"], "install": engine.spec.install})
     return engine, report
+
+
+def require_confirmation(op: str, engine_id: Optional[str], acknowledged: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
+    """ADR-007: an engine whose spec names a confirmation flag runs only when the caller passed that flag, i.e. the
+    user was told first. Refuses with CONFIRMATION_REQUIRED, in English and Japanese, before any engine inspection or
+    ffmpeg-skill call. Returns the acknowledgement record for the provenance, or None when nothing was needed."""
+    need = confirmation_for(op, engine_id)
+    if need is None:
+        return None
+    flag = need["flag"]
+    if flag not in acknowledged:
+        en = f"{need['reason']} Tell the user, then re-run with {flag} to generate with the {need['engine']} engine."
+        ja = f"{need['reason_ja']}ユーザーに伝えてから、{flag} を付けて再実行してください。"
+        raise SoundDesignError("CONFIRMATION_REQUIRED", f"{en}\n{ja}",
+                               {"engine": need["engine"], "op": op, "flag": flag, "message_en": en, "message_ja": ja,
+                                "training_data": get_engine(need["engine"]).spec.training_data, "approval": "CONFIRM",
+                                "adr": need["adr"]})
+    return {"required": True, "engine": need["engine"], "flag": flag, "acknowledged": True,
+            "acknowledged_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "reason": need["reason"],
+            "adr": need["adr"]}
 
 
 def usable_skill(skill: Optional[FfmpegSkill], directory: Optional[str], timeout: float) -> Tuple[FfmpegSkill, SkillInfo]:
@@ -296,6 +320,8 @@ def generate_sfx(req: SfxRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
     GENERATE_BGM: every check first, the engine in the worker, ffmpeg-skill/probe, one rename."""
     caption = _check_common(req, "effect", SFX_MAX_PROMPT, SFX_DEVICES)
     dst = check_output(req.output_path, req.overwrite)
+    confirmation = require_confirmation("sfx", req.engine,
+                                        (ezaudio.ACK_FLAG,) if req.acknowledge_ezaudio_training_data is True else ())
     engine, report = select_engine("sfx", req.engine, req.offline)
     engine.validate(EngineRequest(op="sfx", prompt=caption, duration=req.duration, output_path=dst, seed=req.seed))
     duration = float(req.duration)
@@ -324,7 +350,8 @@ def generate_sfx(req: SfxRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
         provenance = build_provenance(op="sfx", engine=engine_doc, prompt=caption, seed=seed,
                                       duration={"requested": duration, "measured": measured,
                                                 "tolerance": tolerance_for(duration)},
-                                      output_path=wav, parameters=parameters, ffmpeg_skill=info.to_dict())
+                                      output_path=wav, parameters=parameters, ffmpeg_skill=info.to_dict(),
+                                      confirmation=confirmation)
         _place(wav, dst, req.overwrite)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -342,6 +369,7 @@ def generate_sfx(req: SfxRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
                                                    "training_data")},
         "steps": [{"tool": f"{SKILL_ID}/worker", "engine": engine.id}, {"tool": "ffmpeg-skill/probe", "result":
                   {"duration": measured, "sample_rate": a.get("sample_rate"), "channels": a.get("channels")}}],
+        "confirmation": confirmation,
         "provenance": provenance,
         "handoff": {"to": "audio-production-skill MIX", "path": dst, "note": "placed in the programme there; nothing is "
                                                                               "mixed here"},

@@ -2,6 +2,15 @@
 
 ## 0.1.0 - unreleased
 
+EzAudio needs the user's acknowledgement first (ADR-007, the owner's decision: "whenever EzAudio is used, tell me first").
+
+- `generate-sfx` on the `ezaudio` engine refuses to run without `--acknowledge-ezaudio-training-data` (`SfxRequest.acknowledge_ezaudio_training_data`). The refusal comes after the pure argument and output checks and before any engine inspection, ffmpeg-skill call or worker.
+- New error `CONFIRMATION_REQUIRED`, exit code 8, not retryable. The message, in English and then Japanese, states the training-data caveat (AudioSet / VGGSound / AudioCaps, YouTube audio not licensed for training) and the exact flag to add. `details` also carries `message_en`, `message_ja`, `flag`, `training_data` and `approval: "CONFIRM"`.
+- With the flag, `provenance.confirmation` and the result's `confirmation` record `acknowledged: true`, the flag and `acknowledged_at` (UTC). `engine.confirmation_required` joins the provenance engine fields; BGM records `confirmation: null`.
+- `EngineSpec` gains `confirmation_flag`, `confirmation_reason` and `confirmation_reason_ja`; `confirmation_required` is published in `to_dict()`.
+- The contract (each generation tool, and `policy.confirmation`) and doctor (`checks.operations.<op>`) expose `confirmation_required` and `confirmation` (flag, reason in English and Japanese, `CONFIRMATION_REQUIRED`, `approval: "CONFIRM"`), so video-production-agent can surface a CONFIRM step before running the op. The SFX `argv` lists the flag as required.
+- Tests: refusal before any engine or ffmpeg-skill call, the bilingual message, the CLI exit code, success with the flag, the provenance record, contract and doctor fields, and the integration refusal against the real ffmpeg-skill. Existing SFX tests pass the flag.
+
 SFX engine and GENERATE_SFX (roadmap step 3, ADR-005, ADR-006).
 
 - ADR-005: the SFX engine is EzAudio (`ezaudio`), checked from primary sources:

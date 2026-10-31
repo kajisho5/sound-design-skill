@@ -53,12 +53,20 @@ class EngineSpec:
     deterministic: bool = False               # the seed is fixed and recorded; bit-exact repeats on the real engine are unverified (ADR-004)
     lm_status: str = ""                       # whether a language-model stage is used, and why (ADR-004)
     output_warning: Optional[str] = None      # a caution every result from this engine carries (ADR-005); None = none
+    confirmation_flag: Optional[str] = None   # CLI flag the caller must pass before this engine runs (ADR-007); None = none
+    confirmation_reason: Optional[str] = None     # why, in English: what the user acknowledges by passing the flag
+    confirmation_reason_ja: Optional[str] = None  # the same, in Japanese
+
+    @property
+    def confirmation_required(self) -> bool:
+        return bool(self.confirmation_flag)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         for k, v in d.items():
             if isinstance(v, tuple):
                 d[k] = list(v)
+        d["confirmation_required"] = self.confirmation_required
         return d
 
 
