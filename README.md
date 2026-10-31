@@ -17,13 +17,13 @@
 
 Music beds (BGM) and sound effects for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Generated files are handed to [audio-production-skill](https://github.com/kajisho5/audio-production-skill) MIX, which places them in the programme; nothing is mixed here. Probing goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.1.0, GENERATE_BGM and GENERATE_SFX experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)) and `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) work. Library mode is declared (`PROPOSED`) and arrives in [roadmap](ECOSYSTEM_ROADMAP.md) step 4.
+**Status: 0.1.0, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
 
 | Op | Capability | Engine | Step |
 |---|---|---|---|
 | GENERATE_BGM | `audio.bgm_generate` | ACE-Step 1.5 | 2 |
 | GENERATE_SFX | `audio.sfx_generate` | EzAudio ([ADR-005](docs/decisions.md)) | 3 |
-| Library mode | `audio.library_import` | none (user files with a licence field) | 4 |
+| Library mode | `audio.library_import` | none: your own files with a declared licence ([ADR-008](docs/decisions.md)) | 4 |
 
 ```bash
 pip install -e .                     # stdlib only, Python >= 3.9
@@ -33,6 +33,10 @@ sound-design contract --json         # machine-readable contract (alias: skill -
 sound-design generate-bgm --prompt "calm piano bed" --tags "ambient,70 bpm" --duration 60 -o bed.wav --seed 42 --json
 sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 \
   --acknowledge-ezaudio-training-data --json   # required: see "Confirmation before EzAudio" below
+sound-design library-import 朝のピアノ.wav --library ./sounds --licence CC-BY-4.0 --credit "Music: 作曲者" \
+  --kind bgm --tags piano --mood calm --loopable --json   # refused without --licence (LICENCE_REQUIRED)
+sound-design library-index ./sounds --loudness --json   # every file, its licence (declared / unknown) and measured length
+sound-design library-pick ./sounds --kind bgm --tags piano --duration 60 -o bed.wav --json   # chosen, looped / trimmed
 ```
 
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
@@ -54,6 +58,21 @@ Seed determinism and duration accuracy of the real ACE-Step are not measured yet
 - **Warning in every result.** EzAudio's licences (MIT, Apache-2.0) allow commercial use and say nothing about the output. It was trained on AudioSet / VGGSound / AudioCaps, which are YouTube audio not licensed for training by its owners. Every result's `warnings` and every provenance (`engine.training_data`, `engine.output_warning`) say so ([ADR-005](docs/decisions.md)).
 
 Seed determinism, duration accuracy and memory use of the real EzAudio are not measured yet; the tests use a fake checkout with the same API.
+
+## Library mode ([ADR-008](docs/decisions.md))
+
+Your own BGM and SFX (bought packs, commissioned tracks, CC0 / CC BY downloads) instead of generated audio. No engine runs: never ACE-Step, never EzAudio, no worker, nothing downloaded. Every media step is an ffmpeg-skill tool.
+
+- **The library.** A folder of audio files (`.wav .flac .mp3 .m4a .aac .ogg .opus .aif .aiff .caf`, any sub-folders) plus one manifest, `sound-library.json`, at its root. Per file, keyed by its path inside the folder, the manifest holds what you declare: `licence`, `kind` (`bgm` / `sfx`), `tags`, `mood`, `loopable`, `source`, `author`, `credit`. `library-import` writes it for you; you can also edit it by hand (UTF-8). Japanese names work, and macOS (NFD) and Windows / Linux (NFC) spellings of the same name match.
+- **Licences are declared, never invented.** A file with no manifest entry, or whose licence is missing, empty or a placeholder such as `unknown`, is reported as `licence: "unknown"` and is never used. A declared licence is recorded exactly as written with `verified: false`: this skill does not check or clear licences. Warnings point out a non-commercial term, a no-derivatives term on a trimmed or looped file, and a CC BY licence without a credit.
+- **`library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx`.** It refuses a missing licence first, with `LICENCE_REQUIRED` (exit 2; message in English and Japanese). Then ffmpeg-skill `probe` checks that the file is audio only, and `loudness --measure-only` measures it. The file is copied into the library (or registered where it is if it is already inside) and its manifest entry records the declaration, the SHA-256 and the measurements. The input is never modified. An existing file or entry is replaced only with `--overwrite`.
+- **`library-index <dir> [--loudness]`.** Read-only. Every audio file with its licence status, kind, tags, mood and the duration measured by ffmpeg-skill `probe`. With `--loudness`, also the EBU R128 loudness, true peak and LRA. It also reports unreadable files, files changed since import and manifest entries whose file is gone.
+- **`library-pick <dir> -o out.wav --kind bgm|sfx [--tags] [--mood] [--duration <s>] [--file <path>]`.**
+  - Eligible: a declared licence, the kind, at least one requested tag or mood (case- and width-insensitive), audio only, and fittable.
+  - Ranked by: more matched tags and moods; then no fit < trim < loop; then the closer length; then the path; then the SHA-256. The same library and query always give the same file, and every excluded file is listed with its reason.
+  - Fit: within max(0.1 s, 1 %) the file is used whole (a PCM WAV is copied byte for byte; other formats are converted). A longer file is trimmed (`cut --accurate`, no fade: MIX fades). A shorter file is looped only if it is marked `loopable`: copies joined with a crossfade (`--crossfade`, default 0.5 s, at most a quarter of the file) by `join`, then trimmed. A shorter file that is not loopable is excluded.
+  - Output: ffmpeg-skill `probe` validates the WAV (length, rate, one audio stream) and `loudness --measure-only` measures it; nothing is normalised. One rename places it.
+  - The result and its provenance carry the source file (path inside the library, SHA-256), the licence as declared, the selection rule and query, and the fit; `engine` is `null` and `ai_generated` is `false`. The WAV goes to audio-production-skill MIX with its licence and credit.
 
 ## Engines (optional, [ADR-001](docs/decisions.md), [ADR-005](docs/decisions.md))
 
@@ -79,11 +98,11 @@ EzAudio is a git checkout with an unpinned `requirements.txt`, so give it its ow
 
 ## ffmpeg-skill
 
-The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `SOUND_DESIGN_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. It needs `probe`.
+The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `SOUND_DESIGN_FFMPEG_SKILL_DIR`, `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. Compatibility is checked tool by tool and flag by flag against its contract, not by version number. It needs `probe` (every op) and `cut`, `join` and `loudness` (library mode). ffmpeg-skill's `loop` refuses audio-only input, so library mode loops with `join` instead ([ADR-008](docs/decisions.md)).
 
 ## JSON and errors
 
-With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](docs/decisions.md)). A failure is `{"ok": false, "error": {"code", "message", "retryable", "details"}}`, and the code fixes the exit code (`contract --json` lists them under `errors`). `TOOL_ERROR`, `ENGINE_TIMEOUT` and `CANCELLED` are retryable. A declared op that is not built yet is `NOT_IMPLEMENTED` (exit 5). An engine that needs the user's acknowledgement first (EzAudio) is `CONFIRMATION_REQUIRED` (exit 8) until its flag is passed ([ADR-007](docs/decisions.md)).
+With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](docs/decisions.md)). A failure is `{"ok": false, "error": {"code", "message", "retryable", "details"}}`, and the code fixes the exit code (`contract --json` lists them under `errors`). `TOOL_ERROR`, `ENGINE_TIMEOUT` and `CANCELLED` are retryable. A declared op that is not built yet is `NOT_IMPLEMENTED` (exit 5). A library file without a declared licence is `LICENCE_REQUIRED` (exit 2, [ADR-008](docs/decisions.md)). An engine that needs the user's acknowledgement first (EzAudio) is `CONFIRMATION_REQUIRED` (exit 8) until its flag is passed ([ADR-007](docs/decisions.md)).
 
 ## Tests
 
@@ -91,7 +110,7 @@ With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](doc
 python -m unittest discover -s tests -v
 ```
 
-Unit tests need no engine, no weights, no GPU, no FFmpeg and no network. Package lookups are mocked or pointed at a fake install, the checkpoints and the Hugging Face cache are temporary directories, and `nvidia-smi` / `sysctl` are mocked. GENERATE_BGM runs the real worker against a fake `acestep` package with ACE-Step's verified API, which writes a deterministic WAV for a seed and a duration. GENERATE_SFX does the same against a fake EzAudio checkout (`api/ezaudio.py` with the verified API, its `ckpts/` layout and a Flan-T5-XL cache snapshot). The unit tests validate it through a stub ffmpeg-skill, the integration tests through the real one. The integration tests need a real ffmpeg-skill checkout (`SOUND_DESIGN_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present.
+Unit tests need no engine, no weights, no GPU, no FFmpeg and no network. Package lookups are mocked or pointed at a fake install, the checkpoints and the Hugging Face cache are temporary directories, and `nvidia-smi` / `sysctl` are mocked. GENERATE_BGM runs the real worker against a fake `acestep` package with ACE-Step's verified API, which writes a deterministic WAV for a seed and a duration. GENERATE_SFX does the same against a fake EzAudio checkout (`api/ezaudio.py` with the verified API, its `ckpts/` layout and a Flan-T5-XL cache snapshot). The unit tests validate it through a stub ffmpeg-skill, the integration tests through the real one. Library mode's unit tests (`tests/test_library.py`) use a stub ffmpeg-skill that cuts and joins PCM WAVs with the `wave` module. Its integration test writes WAVs under Japanese names and runs import, index and pick through the real ffmpeg-skill. The integration tests need a real ffmpeg-skill checkout (`SOUND_DESIGN_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present.
 
 ## Licence
 

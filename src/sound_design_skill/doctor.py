@@ -6,8 +6,8 @@ Media capabilities are detected through ffmpeg-skill (its contract and its own d
 status: ok (ffmpeg-skill usable, every engine OK) | degraded (an engine MISSING / INCOMPATIBLE) | fail (Python or
 ffmpeg-skill not usable). The device never fails doctor: ACE-Step documents CPU support, so a CPU-only machine is a
 warning. Each op reports whether it is implemented and whether its engine is ready: BGM on ACE-Step 1.5 (ADR-004),
-SFX on EzAudio (ADR-005, ADR-006), and whether its engine needs the user's confirmation flag first (EzAudio does,
-ADR-007)."""
+SFX on EzAudio (ADR-005, ADR-006), library mode with no engine (ADR-008), and whether its engine needs the user's
+confirmation flag first (EzAudio does, ADR-007)."""
 from __future__ import annotations
 
 import platform
@@ -22,10 +22,12 @@ from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
-# op -> implemented? / roadmap step; GENERATE_BGM since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006)
-IMPLEMENTED_OPS: Dict[str, bool] = {"bgm": True, "sfx": True, "library": False}
+# op -> implemented? / roadmap step; GENERATE_BGM since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006), library
+# mode since step 4 (ADR-008)
+IMPLEMENTED_OPS: Dict[str, bool] = {"bgm": True, "sfx": True, "library": True}
 OP_STEP = {"bgm": 2, "sfx": 3, "library": 4}
-NO_ENGINE_NOTE = {"library": "no engine: imports user-supplied BGM / SFX with a licence field"}
+NO_ENGINE_NOTE = {"library": "no engine (never ACE-Step or EzAudio): the user's own BGM / SFX files with a declared "
+                                "licence, chosen, fitted and measured through ffmpeg-skill (ADR-008)"}
 
 
 def engines_report(offline: bool = False) -> Dict[str, Any]:

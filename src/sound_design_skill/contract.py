@@ -38,19 +38,60 @@ _OP_TOOLS = {
             "schema": "sound-design/generate-sfx@1",
             "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
             "output_warning": ezaudio.OUTPUT_WARNING},
-    "library": {"description": "Import a user-supplied BGM / SFX file into the asset library; refuses a missing licence",
-                "inputs": ["audio file", "licence (required)", "source / author"],
-                "argv": ["library-import", "<file>", "--licence <text|SPDX>", "[--source <url|text>]", "[--kind bgm|sfx]", "--json"]},
+    "library": {"description": "Register one user-supplied BGM / SFX file in a library folder with its declared licence "
+                               "(copied in, or registered in place); refuses a missing licence (LICENCE_REQUIRED); "
+                               "measured through ffmpeg-skill probe / loudness; no engine (ADR-008)",
+                "inputs": ["audio file", "library folder", "licence (required; SPDX id or the licence text; never inferred)",
+                           "kind bgm|sfx", "tags / mood", "loopable", "source / author / credit"],
+                "argv": ["library-import", "<file>", "--library <dir>", "--licence <SPDX|text>", "--kind bgm|sfx",
+                         "[--tags <a,b,...>]", "[--mood <a,b,...>]", "[--loopable]", "[--source <url|text>]",
+                         "[--author <text>]", "[--credit <text>]", "[--name <relative path>]", "[--no-loudness]",
+                         "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--timeout 600]", "--json"],
+                "schema": "sound-design/library-import@1",
+                "manifest": "sound-library.json at the library root (schema sound-design/library@1), UTF-8, keyed by "
+                            "the library-relative POSIX path in Unicode NFC"},
 }
+_LIBRARY_TOOLS = [
+    {"tool_id": f"{SKILL_ID}/library-index", "role": "diagnostic", "writes_media": False, "mutates_input": False,
+     "deterministic": True, "implemented": True, "roadmap_step": 4, "engine": None, "engines": [],
+     "description": "Every audio file in a library folder with its licence status (declared / unknown: a file without "
+                    "a declared licence is reported as licence \"unknown\" and never used), kind, tags, mood and the "
+                    "duration measured by ffmpeg-skill/probe (with --loudness, EBU R128 via ffmpeg-skill/loudness "
+                    "--measure-only); read-only",
+     "argv": ["library-index", "<dir>", "[--loudness]", "[--ffmpeg-skill <dir>]", "[--timeout 600]", "--json"],
+     "schema": "sound-design/library-index@1"},
+    {"tool_id": f"{SKILL_ID}/library-pick", "role": "selection", "writes_media": True, "mutates_input": False,
+     "deterministic": True, "implemented": True, "roadmap_step": 4, "engine": None, "engines": [],
+     "description": "One library file chosen deterministically (declared licence, kind, tags / mood, fit), trimmed or "
+                    "looped with a crossfade to the requested duration through ffmpeg-skill cut / join, validated by "
+                    "ffmpeg-skill/probe, loudness measured, placed as a WAV with its provenance (source SHA-256, the "
+                    "licence as declared, the selection and the fit); no engine (ADR-008)",
+     "inputs": ["library folder", "kind bgm|sfx (or --file)", "tags / mood", "duration in seconds (optional)"],
+     "argv": ["library-pick", "<dir>", "-o <out.wav>", "--kind bgm|sfx", "[--tags <a,b,...>]", "[--mood <a,b,...>]",
+              "[--duration <seconds>]", "[--file <relative path>]", "[--crossfade 0.5]", "[--overwrite]",
+              "[--ffmpeg-skill <dir>]", "[--timeout 600]", "--json"],
+     "schema": "sound-design/library-pick@1",
+     "selection": "eligible: declared licence, requested kind, >= 1 requested tag / mood, audio only, fittable; ranked "
+                  "by matched tags + moods, fit (none < trim < loop), |measured - requested| duration, library-relative "
+                  "path, SHA-256",
+     "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
+     "fit": {"none": "within the tolerance: used whole (PCM WAV copied as is, other formats converted)",
+             "trim": "longer: the first <duration> seconds, ffmpeg-skill/cut --accurate, no fade (MIX fades)",
+             "loop": "shorter and marked loopable: N copies joined by ffmpeg-skill/join with a crossfade (at most a "
+                     "quarter of the file), then cut; at most 64 copies",
+             "refused": "shorter and not loopable"}},
+]
 
 
 def tools() -> list:
     out = []
     for op, spec in _OP_TOOLS.items():
         out.append({"tool_id": f"{SKILL_ID}/{TOOL_NAMES[op]}", "role": "generation" if op != "library" else "ingest",
-                    "writes_media": True, "mutates_input": False, "deterministic": False, "implemented": IMPLEMENTED_OPS[op],
+                    "writes_media": True, "mutates_input": False, "deterministic": op == "library",
+                    "implemented": IMPLEMENTED_OPS[op],
                     "roadmap_step": OP_STEP[op], "engine": DEFAULT_ENGINE.get(op), "engines": engines_for(op),
                     "confirmation_required": confirmation_for(op) is not None, "confirmation": confirmation_for(op), **spec})
+    out += [dict(t) for t in _LIBRARY_TOOLS]
     out += [
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engine, weights, ffmpeg-skill), compute device and "
@@ -95,7 +136,9 @@ def contract() -> Dict[str, Any]:
                          "downloading engines or model weights (one-time manual step; doctor says how)",
                          "network access at run time", "direct ffmpeg calls (every media step is an ffmpeg-skill tool)"],
         "handoff": {"bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme",
-                    "sfx": "audio-production-skill MIX places the generated effect (with its provenance) in the programme"},
+                    "sfx": "audio-production-skill MIX places the generated effect (with its provenance) in the programme",
+                    "library": "audio-production-skill MIX places the fitted library WAV (with its provenance, licence and "
+                               "credit) in the programme"},
         "tools": tools(),
         "engines": {"registered": {eid: get_engine(eid).spec.to_dict() for eid in engine_ids()},
                     "default": dict(DEFAULT_ENGINE),
@@ -111,7 +154,13 @@ def contract() -> Dict[str, Any]:
                    "credit": "an engine's credit (credit_required) is carried into the provenance and must appear in the "
                              "published video's description or credits",
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance",
-                   "library_licence": "a library import without a licence is refused (roadmap step 4)",
+                   "library_licence": "library mode uses a user file only with a declared licence: library-import "
+                                      "refuses a missing, empty or placeholder (\"unknown\") licence with "
+                                      "LICENCE_REQUIRED; library-index reports such files as licence \"unknown\"; "
+                                      "library-pick never chooses them. A declared licence is recorded exactly as "
+                                      "declared with verified: false; nothing is inferred or cleared (ADR-008)",
+                   "library_engine": "library mode runs no engine (never ACE-Step or EzAudio, no worker) and downloads "
+                                     "nothing; every media step is an ffmpeg-skill tool (ADR-008)",
                    "confirmation": "an engine whose spec names a confirmation_flag (EzAudio: "
                                    f"{ezaudio.ACK_FLAG}) is refused with CONFIRMATION_REQUIRED before any work unless "
                                    "the caller passes that flag; an orchestrator surfaces it as a CONFIRM step, tells the "
@@ -121,6 +170,11 @@ def contract() -> Dict[str, Any]:
                                   "duration.requested", "duration.measured", "duration.tolerance", "output.sha256", "parameters",
                                   "ffmpeg_skill.version", "confirmation.acknowledged", "confirmation.acknowledged_at",
                                   "confirmation.flag", "network"],
+                       "library_fields": ["skill", "op", "engine (null)", "ai_generated (false)", "source.file",
+                                          "source.sha256", "source.measured", "licence.licence", "licence.status",
+                                          "licence.verified", "licence.credit", "selection.rule", "selection.query",
+                                          "fit.mode", "duration.requested", "duration.measured", "output.sha256",
+                                          "ffmpeg_skill.version", "network"],
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["sound-design", "<command>", "...", "--json"], "network": False, "shell": False,
                       "engine_process": "worker subprocess in its own process group (under the engine's own interpreter "
