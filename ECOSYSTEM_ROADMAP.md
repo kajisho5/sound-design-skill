@@ -22,7 +22,7 @@ None. Generated assets should be placed through audio-production MIX (it owns �
 
 ## Steps
 
-- [ ] **1. Skeleton + contract/doctor + ACE-Step worker** — doctor reports device/VRAM
+- [x] **1. Skeleton + contract/doctor + ACE-Step worker** ([#3](https://github.com/kajisho5/sound-design-skill/pull/3), [docs/decisions.md](docs/decisions.md) ADR-001 engines, ADR-002 skeleton, ADR-003 ASCII JSON; `sound-design doctor` reports ACE-Step `OK` / `MISSING` / `INCOMPATIBLE` with an install line, the device and GPU memory; OS static checks PASS) — doctor reports device/VRAM
   - Done when: OS static checks PASS
 - [ ] **2. GENERATE_BGM op** — prompt/tags, duration, seed; provenance with engine, seed, licence
   - Done when: duration within tolerance; seed determinism (verify on the engine)
