@@ -6,7 +6,8 @@ Media capabilities are detected through ffmpeg-skill (its contract and its own d
 status: ok (ffmpeg-skill usable, every engine OK) | degraded (an engine MISSING / INCOMPATIBLE) | fail (Python or
 ffmpeg-skill not usable). The device never fails doctor: ACE-Step documents CPU support, so a CPU-only machine is a
 warning. Each op reports whether it is implemented and whether its engine is ready: BGM on ACE-Step 1.5 (ADR-004),
-SFX on EzAudio (ADR-005, ADR-006)."""
+SFX on EzAudio (ADR-005, ADR-006), and whether its engine needs the user's confirmation flag first (EzAudio does,
+ADR-007)."""
 from __future__ import annotations
 
 import platform
@@ -15,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from . import SKILL_ID, __version__
 from .device import detect
-from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
+from .engines import DEFAULT_ENGINE, confirmation_for, engine_ids, engines_for, get_engine
 from .engines.base import OK
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
@@ -81,7 +82,8 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         engine_status = engines[eid]["status"] if eid else None
         ops[op] = {"implemented": IMPLEMENTED_OPS[op], "roadmap_step": OP_STEP[op], "engine": eid, "engine_status": engine_status,
                    "alternatives": [e for e in engines_for(op) if e != eid],
-                   "ready": bool(IMPLEMENTED_OPS[op] and media_ok and (eid is None or engine_status == OK))}
+                   "ready": bool(IMPLEMENTED_OPS[op] and media_ok and (eid is None or engine_status == OK)),
+                   "confirmation_required": confirmation_for(op) is not None, "confirmation": confirmation_for(op)}
         if op in NO_ENGINE_NOTE:
             ops[op]["note"] = NO_ENGINE_NOTE[op]
     checks["operations"] = ops

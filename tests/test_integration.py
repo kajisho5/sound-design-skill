@@ -114,10 +114,19 @@ class GenerateSfxIntegrationTests(unittest.TestCase):
         self.fake = engine_cm.__enter__()
         self.addCleanup(engine_cm.__exit__, None, None, None)
 
-    def cli(self, name, *extra):
+    def cli(self, name, *extra, acknowledge=True):
         out = os.path.join(self.out_dir, name)
+        ack = ("--acknowledge-ezaudio-training-data",) if acknowledge else ()   # ADR-007
         return out, run_cli("generate-sfx", "--prompt", "a wooden door closes", "--tags", "indoor", "--duration", "3",
-                            "-o", out, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json", *extra)
+                            "-o", out, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json", *ack, *extra)
+
+    def test_without_the_flag_nothing_runs(self):
+        out, (rc, doc) = self.cli("refused.wav", "--seed", "1", acknowledge=False)
+        self.assertEqual((rc, doc["error"]["code"]), (8, "CONFIRMATION_REQUIRED"))
+        self.assertIn("--acknowledge-ezaudio-training-data", doc["error"]["message"])
+        self.assertEqual(self.fake["calls"](), [])
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(os.listdir(self.out_dir), [])
 
     def test_effect_validated_by_the_real_probe_and_repeatable_by_seed(self):
         out, (rc, doc) = self.cli("a.wav", "--seed", "2026")
@@ -130,6 +139,8 @@ class GenerateSfxIntegrationTests(unittest.TestCase):
         self.assertEqual((doc["provenance"]["seed"], doc["provenance"]["engine"]["id"]), (2026, "ezaudio"))
         self.assertEqual(doc["provenance"]["prompt"]["text"], "a wooden door closes, indoor")
         self.assertTrue(doc["warnings"])
+        self.assertTrue(doc["provenance"]["confirmation"]["acknowledged"])
+        self.assertTrue(doc["provenance"]["confirmation"]["acknowledged_at"].endswith("Z"))
         _, (rc2, doc2) = self.cli("b.wav", "--seed", "2026")
         _, (rc3, doc3) = self.cli("c.wav", "--seed", "2027")
         self.assertEqual((rc2, rc3), (0, 0))

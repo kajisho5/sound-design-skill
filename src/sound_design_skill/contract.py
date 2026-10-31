@@ -7,7 +7,7 @@ from typing import Any, Dict
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .device import ACESTEP_TIERS
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP
-from .engines import DEFAULT_ENGINE, engine_ids, engines_for, get_engine
+from .engines import DEFAULT_ENGINE, confirmation_for, engine_ids, engines_for, get_engine
 from .engines import ezaudio
 from .engines.acestep import DEVICES
 from .errors import ERROR_TABLE
@@ -34,7 +34,7 @@ _OP_TOOLS = {
                        "duration in whole seconds (engine range; EzAudio 1-10)", "seed (drawn when omitted; always recorded)"],
             "argv": ["generate-sfx", "--prompt <text>", "[--tags <a,b,...>]", "--duration <seconds>", "-o <out.wav>",
                      "[--seed <int>]", "[--engine ezaudio]", f"[--device {'|'.join(ezaudio.DEVICES)}]", "[--timeout 600]",
-                     "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
+                     "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", ezaudio.ACK_FLAG, "--json"],
             "schema": "sound-design/generate-sfx@1",
             "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
             "output_warning": ezaudio.OUTPUT_WARNING},
@@ -49,7 +49,8 @@ def tools() -> list:
     for op, spec in _OP_TOOLS.items():
         out.append({"tool_id": f"{SKILL_ID}/{TOOL_NAMES[op]}", "role": "generation" if op != "library" else "ingest",
                     "writes_media": True, "mutates_input": False, "deterministic": False, "implemented": IMPLEMENTED_OPS[op],
-                    "roadmap_step": OP_STEP[op], "engine": DEFAULT_ENGINE.get(op), "engines": engines_for(op), **spec})
+                    "roadmap_step": OP_STEP[op], "engine": DEFAULT_ENGINE.get(op), "engines": engines_for(op),
+                    "confirmation_required": confirmation_for(op) is not None, "confirmation": confirmation_for(op), **spec})
     out += [
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engine, weights, ffmpeg-skill), compute device and "
@@ -110,10 +111,16 @@ def contract() -> Dict[str, Any]:
                    "credit": "an engine's credit (credit_required) is carried into the provenance and must appear in the "
                              "published video's description or credits",
                    "watermark": "an engine's watermark is never removed or bypassed; it is recorded in the provenance",
-                   "library_licence": "a library import without a licence is refused (roadmap step 4)"},
+                   "library_licence": "a library import without a licence is refused (roadmap step 4)",
+                   "confirmation": "an engine whose spec names a confirmation_flag (EzAudio: "
+                                   f"{ezaudio.ACK_FLAG}) is refused with CONFIRMATION_REQUIRED before any work unless "
+                                   "the caller passes that flag; an orchestrator surfaces it as a CONFIRM step, tells the "
+                                   "user the tool's confirmation.reason, and passes the flag only after the user agrees; "
+                                   "the acknowledgement and its time go into provenance.confirmation (ADR-007)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "prompt.text", "prompt.sha256", "seed",
                                   "duration.requested", "duration.measured", "duration.tolerance", "output.sha256", "parameters",
-                                  "ffmpeg_skill.version", "network"],
+                                  "ffmpeg_skill.version", "confirmation.acknowledged", "confirmation.acknowledged_at",
+                                  "confirmation.flag", "network"],
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["sound-design", "<command>", "...", "--json"], "network": False, "shell": False,
                       "engine_process": "worker subprocess in its own process group (under the engine's own interpreter "

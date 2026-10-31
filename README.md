@@ -17,7 +17,7 @@
 
 Music beds (BGM) and sound effects for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Generated files are handed to [audio-production-skill](https://github.com/kajisho5/audio-production-skill) MIX, which places them in the programme; nothing is mixed here. Probing goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.1.0, GENERATE_BGM and GENERATE_SFX experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)) and `generate-sfx` ([ADR-006](docs/decisions.md)) work. Library mode is declared (`PROPOSED`) and arrives in [roadmap](ECOSYSTEM_ROADMAP.md) step 4.
+**Status: 0.1.0, GENERATE_BGM and GENERATE_SFX experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)) and `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) work. Library mode is declared (`PROPOSED`) and arrives in [roadmap](ECOSYSTEM_ROADMAP.md) step 4.
 
 | Op | Capability | Engine | Step |
 |---|---|---|---|
@@ -31,7 +31,8 @@ sound-design doctor                  # engine OK / MISSING / INCOMPATIBLE, devic
 sound-design engines --json          # status, version, licences and output-use terms per engine
 sound-design contract --json         # machine-readable contract (alias: skill --json)
 sound-design generate-bgm --prompt "calm piano bed" --tags "ambient,70 bpm" --duration 60 -o bed.wav --seed 42 --json
-sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 --json
+sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 \
+  --acknowledge-ezaudio-training-data --json   # required: see "Confirmation before EzAudio" below
 ```
 
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
@@ -49,6 +50,7 @@ Seed determinism and duration accuracy of the real ACE-Step are not measured yet
 - **Inputs.** `--prompt` and / or `--tags` (< 512 characters; EzAudio's text encoder reads 100 tokens), `--duration` in whole seconds (EzAudio: 1-10 s), `--seed` (drawn and recorded when omitted), `--device auto|cuda|cpu`.
 - **Same frame as BGM.** Every check passes first, then EzAudio runs in the worker, ffmpeg-skill `probe` checks the WAV (one audio stream, 24 kHz, duration ± max(0.1 s, 1 %)), and one rename puts it in place.
 - **Engine.** EzAudio runs under `SOUND_DESIGN_EZAUDIO_PYTHON`, through its Python API (`EzAudio(model_name="s3_xl", ckpt_path, vae_path, device)` + `generate_audio`, read from its source at a fixed commit). Both checkpoint paths are passed and its `download_ckpt` is replaced with a refusal. Flan-T5-XL comes from the Hugging Face cache only.
+- **Confirmation before EzAudio ([ADR-007](docs/decisions.md)).** By the owner's decision, the user is told about EzAudio's training data before it runs. Without `--acknowledge-ezaudio-training-data`, `generate-sfx` stops with `CONFIRMATION_REQUIRED` (exit 8). This happens before any engine inspection, ffmpeg-skill call or worker. The message, in English and Japanese, gives the caveat and the flag to add. With the flag, `provenance.confirmation` records `acknowledged: true` and `acknowledged_at` (UTC). `contract --json` (the `generate-sfx` tool) and `doctor --json` (`checks.operations.sfx`) carry `confirmation_required: true` with the reason, so an orchestrator such as video-production-agent can ask the user as a CONFIRM step first.
 - **Warning in every result.** EzAudio's licences (MIT, Apache-2.0) allow commercial use and say nothing about the output. It was trained on AudioSet / VGGSound / AudioCaps, which are YouTube audio not licensed for training by its owners. Every result's `warnings` and every provenance (`engine.training_data`, `engine.output_warning`) say so ([ADR-005](docs/decisions.md)).
 
 Seed determinism, duration accuracy and memory use of the real EzAudio are not measured yet; the tests use a fake checkout with the same API.
@@ -81,7 +83,7 @@ The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `SOUND_DESIGN_
 
 ## JSON and errors
 
-With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](docs/decisions.md)). A failure is `{"ok": false, "error": {"code", "message", "retryable", "details"}}`, and the code fixes the exit code (`contract --json` lists them under `errors`). `TOOL_ERROR`, `ENGINE_TIMEOUT` and `CANCELLED` are retryable. A declared op that is not built yet is `NOT_IMPLEMENTED` (exit 5).
+With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](docs/decisions.md)). A failure is `{"ok": false, "error": {"code", "message", "retryable", "details"}}`, and the code fixes the exit code (`contract --json` lists them under `errors`). `TOOL_ERROR`, `ENGINE_TIMEOUT` and `CANCELLED` are retryable. A declared op that is not built yet is `NOT_IMPLEMENTED` (exit 5). An engine that needs the user's acknowledgement first (EzAudio) is `CONFIRMATION_REQUIRED` (exit 8) until its flag is passed ([ADR-007](docs/decisions.md)).
 
 ## Tests
 

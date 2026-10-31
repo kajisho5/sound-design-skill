@@ -8,7 +8,8 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   sound-design doctor --json       engine, weights, device / GPU memory, ffmpeg-skill, ops [--offline] [--ffmpeg-skill DIR]
   sound-design engines --json      registered engines with status and licences [--offline]
   sound-design generate-bgm --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-004)
-  sound-design generate-sfx --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-006)
+  sound-design generate-sfx --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N]
+                            --acknowledge-ezaudio-training-data --json                                  (ADR-006, ADR-007)
 
 library-import is declared PROPOSED and arrives in roadmap step 4."""
 from __future__ import annotations
@@ -68,6 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
     s.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     s.add_argument("--offline", action="store_true", help="no network (every registered engine already needs none)")
+    s.add_argument("--acknowledge-ezaudio-training-data", action="store_true",
+                   help="required with the ezaudio engine: the user was told that EzAudio was trained on YouTube audio "
+                        "not licensed for training (ADR-007); recorded with its time in the provenance")
     s.add_argument("--json", action="store_true")
     return ap
 
@@ -102,6 +106,8 @@ def _human(doc: Dict[str, Any]) -> None:
                 print(f"    install: {e['install']}")
         for op, o in doc["checks"]["operations"].items():
             print(f"  op {op:14} implemented={o['implemented']} engine={o['engine']} ready={o['ready']}")
+            if o.get("confirmation_required"):
+                print(f"    confirm first: tell the user, then pass {o['confirmation']['flag']} (ADR-007)")
         for p in doc["problems"]:
             print(f"  problem: {p}")
         for w in doc["warnings"]:
@@ -110,6 +116,9 @@ def _human(doc: Dict[str, Any]) -> None:
         out = doc["output"]
         print(f"{out['path']}: {out['duration']:.2f}s, {out['sample_rate']} Hz, {out['channels']} ch; seed "
               f"{doc['request']['seed']} ({doc['request']['seed_source']}); engine {doc['engine']['id']} {doc['engine']['version']}")
+        if doc.get("confirmation"):
+            c = doc["confirmation"]
+            print(f"  acknowledged: {c['flag']} at {c['acknowledged_at']}")
         for w in doc.get("warnings") or []:
             print(f"  warning: {w}")
     elif "engines" in doc and "skill_id" not in doc:
@@ -157,7 +166,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(generate_sfx(SfxRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,
                                           seed=args.seed, engine=args.engine, device=args.device, timeout=args.timeout,
                                           overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
-                                          offline=args.offline)), as_json)
+                                          offline=args.offline,
+                                          acknowledge_ezaudio_training_data=args.acknowledge_ezaudio_training_data)), as_json)
             return 0
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)

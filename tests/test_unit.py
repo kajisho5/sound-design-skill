@@ -2,7 +2,7 @@
 lookups, a fake ACE-Step install, a fake checkpoints directory and Hugging Face cache), device / GPU memory detection
 (mocked nvidia-smi and sysctl), the worker subprocess and its network guard, the ACE-Step adapter against a fake
 engine with the verified API (ADR-004), GENERATE_BGM through a stub ffmpeg-skill, the EzAudio adapter against a fake
-checkout with the verified API and GENERATE_SFX (ADR-005, ADR-006), doctor, provenance and the OS registry
+checkout with the verified API and GENERATE_SFX (ADR-005, ADR-006) with its confirmation flag (ADR-007), doctor, provenance and the OS registry
 conformance checks. No engine, no weights, no GPU, no ffmpeg and no network are needed; nothing is
 downloaded."""
 from __future__ import annotations
@@ -64,6 +64,8 @@ class ErrorTests(unittest.TestCase):
             self.assertGreaterEqual(exit_code, 2)
             self.assertIsInstance(retryable, bool)
         self.assertEqual({c for c, (_, r) in ERROR_TABLE.items() if r}, {"TOOL_ERROR", "ENGINE_TIMEOUT", "CANCELLED"})
+        self.assertEqual(ERROR_TABLE["CONFIRMATION_REQUIRED"], (8, False))                 # ADR-007: its own exit code
+        self.assertEqual([c for c, (e, _) in ERROR_TABLE.items() if e == 8], ["CONFIRMATION_REQUIRED"])
 
     def test_error_document(self):
         e = SoundDesignError("ENGINE_TIMEOUT", "slow", {"engine": "x"})
@@ -95,10 +97,26 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((sfx["schema"], sfx["engine"], sfx["engines"], sfx["deterministic"]), (SFX_SCHEMA, "ezaudio", ["ezaudio"], False))
         self.assertIn("YouTube", sfx["output_warning"])
         self.assertIn("--device auto|cuda|cpu", " ".join(sfx["argv"]).replace("[", "").replace("]", ""))
+        # ADR-007: the contract says EzAudio needs the user's confirmation, why, and the exact flag (unbracketed: required)
+        self.assertIs(sfx["confirmation_required"], True)
+        conf = sfx["confirmation"]
+        self.assertEqual((conf["engine"], conf["flag"], conf["error_code"], conf["approval"]),
+                         ("ezaudio", "--acknowledge-ezaudio-training-data", "CONFIRMATION_REQUIRED", "CONFIRM"))
+        self.assertIn("YouTube", conf["reason"])
+        self.assertIn("YouTube", conf["reason_ja"])
+        self.assertIn("ADR-007", conf["adr"])
+        self.assertIn("--acknowledge-ezaudio-training-data", sfx["argv"])
+        self.assertIn("ADR-007", c["policy"]["confirmation"])
+        self.assertIn("confirmation.acknowledged_at", c["provenance"]["fields"])
+        self.assertTrue(c["engines"]["registered"]["ezaudio"]["confirmation_required"])
+        self.assertFalse(c["engines"]["registered"]["acestep"]["confirmation_required"])
+        lib = next(t for t in c["tools"] if t["tool_id"] == "sound-design/library-import")
+        self.assertEqual((lib["confirmation_required"], lib["confirmation"]), (False, None))
         bgm = next(t for t in c["tools"] if t["tool_id"] == "sound-design/generate-bgm")
         self.assertEqual(bgm["schema"], BGM_SCHEMA)
         self.assertIn("off", bgm["language_model"])
         self.assertFalse(bgm["deterministic"])                                # unverified on the real engine
+        self.assertEqual((bgm["confirmation_required"], bgm["confirmation"]), (False, None))
         for d in c["dependencies"]:
             self.assertIsInstance(d["version_range"], str)
             self.assertFalse(d["version_range"].replace(".", "").isdigit(), d)
@@ -679,6 +697,8 @@ class GenerateBgmTests(unittest.TestCase):
         self.assertEqual(p["parameters"]["generation_config"]["seeds"], [1234])
         self.assertEqual(p["ffmpeg_skill"]["version"], "2.23.0")
         self.assertFalse(p["network"])
+        self.assertIsNone(p["confirmation"])                                # ACE-Step needs no confirmation (ADR-007)
+        self.assertFalse(e["confirmation_required"])
         self.assertEqual(self.skill.probed[-1].endswith("bgm.wav"), True)   # probed in the run dir, before placement
         self.assert_clean()
         self.assertNotIn("acestep", sys.modules)
@@ -800,6 +820,12 @@ class EzAudioSpecTests(unittest.TestCase):
         self.assertIn(ezaudio.ENV_PYTHON, s.install)
         self.assertIn(ezaudio.API_COMMIT[:8], s.version_range)
         self.assertIsNone(get_engine("acestep").spec.output_warning)
+        self.assertEqual(s.confirmation_flag, ezaudio.ACK_FLAG)                   # ADR-007
+        self.assertTrue(s.confirmation_required and s.to_dict()["confirmation_required"])
+        self.assertIn("AudioSet", s.confirmation_reason)
+        self.assertIn("AudioSet", s.confirmation_reason_ja)
+        self.assertIsNone(get_engine("acestep").spec.confirmation_flag)
+        self.assertFalse(get_engine("acestep").spec.confirmation_required)
 
     def test_request_validation_needs_no_engine(self):
         eng = get_engine("ezaudio")
@@ -1014,13 +1040,16 @@ class GenerateSfxTests(unittest.TestCase):
         kw.setdefault("output_path", self.out())
         kw.setdefault("duration", 2.0)
         kw.setdefault("prompt", "a wooden door closes")
+        kw.setdefault("acknowledge_ezaudio_training_data", True)          # ADR-007; refusals without it are tested below
         return generate_sfx(SfxRequest(**kw), skill=self.skill)
 
     def assert_clean(self):
         self.assertEqual([n for n in os.listdir(self.out_dir) if n.startswith(".sound-design-")], [])
 
     def test_effect_with_provenance(self):
+        before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         doc = self.sfx(tags=["indoor", " close "], seed=99)
+        after = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self.assertEqual((doc["schema"], doc["ok"], doc["op"], doc["capability"]), (SFX_SCHEMA, True, "sfx", "audio.sfx_generate"))
         self.assertEqual(doc["output"]["path"], self.out())
         self.assertAlmostEqual(doc["output"]["duration"], 2.0, places=3)
@@ -1045,6 +1074,16 @@ class GenerateSfxTests(unittest.TestCase):
         self.assertEqual(p["ffmpeg_skill"]["version"], "2.23.0")
         self.assertFalse(p["network"])
         self.assertEqual(doc["warnings"], [ezaudio.OUTPUT_WARNING])
+        # ADR-007: the provenance records that the user acknowledged EzAudio's training data, and when
+        c = p["confirmation"]
+        self.assertEqual((c["required"], c["engine"], c["flag"], c["acknowledged"]),
+                         (True, "ezaudio", "--acknowledge-ezaudio-training-data", True))
+        self.assertRegex(c["acknowledged_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertTrue(before <= c["acknowledged_at"] <= after <= p["created_at"])
+        self.assertIn("YouTube", c["reason"])
+        self.assertIn("ADR-007", c["adr"])
+        self.assertTrue(e["confirmation_required"])
+        self.assertEqual(doc["confirmation"], c)
         self.assertEqual(doc["handoff"]["to"], "audio-production-skill MIX")
         self.assertTrue(self.skill.probed[-1].endswith("sfx.wav"))           # probed in the run dir, before placement
         self.assert_clean()
@@ -1095,11 +1134,71 @@ class GenerateSfxTests(unittest.TestCase):
         self.assertEqual(self.skill.probed, [])
         self.assert_clean()
 
-    def test_engine_is_checked_before_ffmpeg_skill(self):
+    def test_without_the_flag_ezaudio_is_refused_before_any_engine_or_ffmpeg_skill_call(self):
+        # ADR-007: the owner is told first. No engine inspection, no worker, no ffmpeg-skill, nothing written.
+        boom = AssertionError("must not be reached without the acknowledgement")
+        with mock.patch("sound_design_skill.ops.select_engine", side_effect=boom) as sel, \
+                mock.patch("sound_design_skill.ops.usable_skill", side_effect=boom) as use, \
+                mock.patch("sound_design_skill.ops.run_engine", side_effect=boom) as run, \
+                mock.patch("sound_design_skill.ops.FfmpegSkill.locate", side_effect=boom) as loc, \
+                mock.patch.object(ezaudio.EzAudioEngine, "inspect", side_effect=boom) as insp:
+            for kw in ({"acknowledge_ezaudio_training_data": False}, {"acknowledge_ezaudio_training_data": "yes"},
+                       {"acknowledge_ezaudio_training_data": False, "engine": "ezaudio"}):
+                with self.assertRaises(SoundDesignError, msg=kw) as e:
+                    self.sfx(seed=5, **kw)
+                err = e.exception
+                self.assertEqual((err.code, err.exit_code, err.retryable), ("CONFIRMATION_REQUIRED", 8, False), kw)
+            for m in (sel, use, run, loc, insp):
+                m.assert_not_called()
+        self.assertEqual(self.fake["calls"](), [])
+        self.assertEqual(self.skill.probed, [])
+        self.assertFalse(os.path.exists(self.out()))
+        self.assert_clean()
+        # the message, in English and Japanese, states the training-data caveat and the exact flag to add
+        en, ja = err.message.split("\n")
+        for text in (en, ja, err.details["message_en"], err.details["message_ja"]):
+            self.assertIn("--acknowledge-ezaudio-training-data", text)
+            self.assertIn("YouTube", text)
+            self.assertIn("AudioSet", text)
+        self.assertIn("re-run with --acknowledge-ezaudio-training-data", en)
+        self.assertIn("学習", ja)
+        self.assertIn("再実行", ja)
+        self.assertEqual((err.details["engine"], err.details["op"], err.details["flag"], err.details["approval"]),
+                         ("ezaudio", "sfx", ezaudio.ACK_FLAG, "CONFIRM"))
+        self.assertEqual(err.details["training_data"], ezaudio.TRAINING_DATA)
+        self.assertIn("ADR-007", err.details["adr"])
+
+    def test_the_confirmation_comes_before_engine_and_ffmpeg_skill_checks(self):
+        # a missing engine and a missing ffmpeg-skill are reported only once the user has acknowledged
         os.remove(os.path.join(self.fake["dir"], "ckpts", "s3", "ezaudio_s3_xl.pt"))
         with self.assertRaises(SoundDesignError) as e:
             generate_sfx(SfxRequest(output_path=self.out(), duration=2.0, prompt="x",
                                     ffmpeg_skill_dir=os.path.join(self.dir, "no-ffmpeg-skill")))
+        self.assertEqual(e.exception.code, "CONFIRMATION_REQUIRED")
+        self.assertEqual(self.fake["calls"](), [])
+
+    def test_cli_refuses_without_the_flag_as_json(self):
+        rc, doc = run_cli("generate-sfx", "--prompt", "door slam", "--duration", "2", "-o", self.out(), "--seed", "9",
+                          "--ffmpeg-skill", os.path.join(self.dir, "no-ffmpeg-skill"), "--json")
+        self.assertEqual((rc, doc["ok"], doc["error"]["code"], doc["error"]["retryable"]), (8, False, "CONFIRMATION_REQUIRED", False))
+        self.assertIn("--acknowledge-ezaudio-training-data", doc["error"]["message"])
+        self.assertIn("再実行", doc["error"]["details"]["message_ja"])
+        self.assertEqual(self.fake["calls"](), [])
+        self.assertFalse(os.path.exists(self.out()))
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            from sound_design_skill import cli
+            rc = cli.main(["generate-sfx", "--prompt", "door slam", "--duration", "2", "-o", self.out()])
+        self.assertEqual(rc, 8)
+        self.assertIn("error [CONFIRMATION_REQUIRED]", buf.getvalue())
+        self.assertIn("--acknowledge-ezaudio-training-data", buf.getvalue())
+
+    def test_engine_is_checked_before_ffmpeg_skill(self):
+        os.remove(os.path.join(self.fake["dir"], "ckpts", "s3", "ezaudio_s3_xl.pt"))
+        with self.assertRaises(SoundDesignError) as e:
+            generate_sfx(SfxRequest(output_path=self.out(), duration=2.0, prompt="x",
+                                    ffmpeg_skill_dir=os.path.join(self.dir, "no-ffmpeg-skill"),
+                                    acknowledge_ezaudio_training_data=True))
         self.assertEqual(e.exception.code, "MODEL_NOT_FOUND")     # not FFMPEG_SKILL_UNAVAILABLE
         self.assertEqual(self.fake["calls"](), [])
 
@@ -1123,7 +1222,7 @@ class GenerateSfxTests(unittest.TestCase):
     def test_cli_reports_a_missing_engine_as_json(self):
         with env(SOUND_DESIGN_EZAUDIO_DIR=os.path.join(self.dir, "empty")):
             rc, doc = run_cli("generate-sfx", "--prompt", "door slam", "--tags", "wood,indoor", "--duration", "2",
-                              "-o", self.out(), "--seed", "9", "--json")
+                              "-o", self.out(), "--seed", "9", "--acknowledge-ezaudio-training-data", "--json")
         self.assertEqual((rc, doc["ok"], doc["error"]["code"]), (3, False, "ENGINE_UNAVAILABLE"))
         self.assertIn(ezaudio.ENV_DIR, doc["error"]["details"]["install"])
         self.assertFalse(os.path.exists(self.out()))
@@ -1132,9 +1231,11 @@ class GenerateSfxTests(unittest.TestCase):
         buf, skill = io.StringIO(), self.skill
         with mock.patch("sound_design_skill.ops.FfmpegSkill.locate", return_value=skill), mock.patch("sys.stdout", buf):
             from sound_design_skill import cli
-            rc = cli.main(["generate-sfx", "--prompt", "door slam", "--duration", "2", "-o", self.out(), "--seed", "4"])
+            rc = cli.main(["generate-sfx", "--prompt", "door slam", "--duration", "2", "-o", self.out(), "--seed", "4",
+                           "--acknowledge-ezaudio-training-data"])
         self.assertEqual(rc, 0)
         self.assertIn("24000 Hz, 1 ch; seed 4 (given); engine ezaudio", buf.getvalue())
+        self.assertIn("acknowledged: --acknowledge-ezaudio-training-data at ", buf.getvalue())
         self.assertIn("warning: EzAudio was trained on YouTube audio", buf.getvalue())
 
 
@@ -1186,7 +1287,15 @@ class DoctorTests(unittest.TestCase):
         sfx = d["checks"]["operations"]["sfx"]
         self.assertEqual((sfx["implemented"], sfx["engine"], sfx["engine_status"], sfx["roadmap_step"]), (True, "ezaudio", "MISSING", 3))
         self.assertNotIn("note", sfx)
+        # ADR-007: doctor tells an orchestrator that SFX on EzAudio is a CONFIRM step, why, and the flag
+        self.assertIs(sfx["confirmation_required"], True)
+        self.assertEqual((sfx["confirmation"]["flag"], sfx["confirmation"]["approval"]), (ezaudio.ACK_FLAG, "CONFIRM"))
+        self.assertIn("YouTube", sfx["confirmation"]["reason"])
+        self.assertEqual(cli_doc["checks"]["operations"]["sfx"]["confirmation"], sfx["confirmation"])
+        bgm_op = d["checks"]["operations"]["bgm"]
+        self.assertEqual((bgm_op["confirmation_required"], bgm_op["confirmation"]), (False, None))
         ez = d["checks"]["engines"]["ezaudio"]
+        self.assertTrue(ez["confirmation_required"])
         self.assertEqual(ez["status"], "MISSING")
         self.assertIn("SOUND_DESIGN_EZAUDIO_DIR", ez["install"])
         self.assertEqual((rc, cli_doc["status"], cli_doc["offline"]), (1, "fail", True))
