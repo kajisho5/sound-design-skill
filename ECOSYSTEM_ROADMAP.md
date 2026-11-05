@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-Scaffold: one-line README. Engine in ecosystem.json: ACE-Step 1.5 (MIT, commercial use of output stated, <4 GB VRAM). No SFX engine named yet (since step 3: EzAudio, ADR-005).
+0.1.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
@@ -18,7 +18,7 @@ Scaffold: one-line README. Engine in ecosystem.json: ACE-Step 1.5 (MIT, commerci
 
 ## Wiring
 
-None. Generated assets should be placed through audio-production MIX (it owns ミックス), not mixed here.
+The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the last input of audio-production MIX (step 5, video-production-agent#107); sound effects are not wired. Generated assets are placed through audio-production MIX (it owns ミックス), not mixed here.
 
 ## Steps
 
@@ -35,4 +35,4 @@ None. Generated assets should be placed through audio-production MIX (it owns �
 - [x] **6. ffmpeg-skill 3.0.0** — its contract_version 2.0 read without a warning; CI integration also against 3.0.0 ([#9](https://github.com/kajisho5/sound-design-skill/pull/9), ADR-010)
 
 ---
-Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (42 tools, treated as complete). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
+Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
