@@ -33,6 +33,18 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
 - [x] **5. SKILL.md, CI; (agent side) BGM -> MIX** (skill side done: [#8](https://github.com/kajisho5/sound-design-skill/pull/8), [docs/decisions.md](docs/decisions.md) ADR-009; `SKILL.md` kept in step with the contract by `SkillMdTests`, which run in every job of `tests.yml` (unit on Linux / macOS / Windows x Python 3.9 / 3.12, integration against the real ffmpeg-skill, nothing skipped); agent side: [video-production-agent#107](https://github.com/kajisho5/video-production-agent/pull/107) (its ADR-092) plans `bgm.library` (library-pick) or `bgm.prompt` (generate-bgm) as a CONFIRM `audio.bgm` whose bed, at the mix's length, is the last input of audio-production MIX; the end-to-end plan runs on the real Skills in its CI)
   - Done when: end-to-end plan
 - [x] **6. ffmpeg-skill 3.0.0** — its contract_version 2.0 read without a warning; CI integration also against 3.0.0 ([#9](https://github.com/kajisho5/sound-design-skill/pull/9), ADR-010)
+- [ ] **7. Loopable beds and timed stingers** — a BGM bed with a seamless loop point (measured: no click, matching level and spectrum across the seam) for standby screens, and stinger sounds (whoosh, hit, rise) of an exact length with their peak at a stated time, so a transition's sound lands on its cut point. Field review 2026-11-05 (Velisa ROADMAP, third round)
+  - なぜ要るか：配信の待機画面のループ BGM と、スティンガーの効果音をカット点に合わせて用意できる
+  - Done when: a looped bed repeated 10 times passes qc-skill's loop seam check; a stinger's peak is within 10 ms of the stated time
+- [ ] **8. Tempo-targeted generation and a tempo map** — GENERATE_BGM at a requested BPM and length, ending on a bar line, and the beat grid written as data beside the audio (no re-measuring needed downstream)
+  - なぜ要るか：「120BPM、15秒」の文字PVに、ぴったり合う音楽と拍の情報を同時に渡せる
+  - Done when: ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms
+- [ ] **9. Sound-effect cue sheet** — SFX_CUES: from cut points and emphasis times the caller gives, a cue sheet of library or generated effects (pop, whoosh, ding) with levels and a minimum spacing, for audio-production MIX to place; the skill never decides where the emphasis is
+  - なぜ要るか：YouTube 風の効果音を、カットや強調テロップの時刻に揃えて置ける
+  - Done when: a fixture with 10 cut times yields a cue sheet whose effects sit at those times and respect the spacing
+- [ ] **10. Stock music and SFX with licence records** — library mode reads royalty-free sources the user has downloaded (with their licence text or URL), records the licence, the attribution line and whether the track is registered for Content ID when the source says so, and refuses a file without a licence as today
+  - なぜ要るか：BGM の権利表記漏れと、Content ID の申し立てを事前に避けられる
+  - Done when: a fixture track with a CC BY licence yields its attribution line in the receipt; a track marked Content ID registered is warned about
 
 ---
 Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
