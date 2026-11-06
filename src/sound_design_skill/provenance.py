@@ -71,3 +71,24 @@ def build_library_provenance(*, source: Dict[str, Any], licence: Dict[str, Any],
         "network": False,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+
+
+def build_shaping_provenance(*, op: str, source: Dict[str, Any], parameters: Dict[str, Any], result: Dict[str, Any],
+                             output_sha256: str, ffmpeg_skill: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Provenance of a loop-bed / stinger output (ADR-011): the source file by name and SHA-256 (never a path), the
+    parameters and what was measured. No engine ran here; whether the source was generated, and under which licence
+    it may be used, is in the source's own provenance (generate-bgm / generate-sfx / library-pick), which travels
+    with it."""
+    return {
+        "skill": {"id": SKILL_ID, "version": __version__},
+        "op": op,
+        "engine": None,
+        "ai_generated": "as the source: see its own provenance",
+        "source": dict(source),
+        "parameters": dict(parameters),
+        "result": dict(result),
+        "output": {"sha256": output_sha256},
+        "ffmpeg_skill": None if ffmpeg_skill is None else {k: ffmpeg_skill.get(k) for k in ("version", "contract_version")},
+        "network": False,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }

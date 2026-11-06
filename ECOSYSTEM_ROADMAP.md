@@ -36,6 +36,7 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
 - [ ] **7. Loopable beds and timed stingers** — a BGM bed with a seamless loop point (measured: no click, matching level and spectrum across the seam) for loops in an edit, and stinger sounds (whoosh, hit, rise) of an exact length with their peak at a stated time, so a transition's sound lands on its cut point. Field review 2026-11-05 (Velisa ROADMAP, third round)
   - なぜ要るか：ループ素材の BGM と、スティンガーの効果音をカット点に合わせて用意できる
   - Done when: a looped bed repeated 10 times passes qc-skill's loop seam check; a stinger's peak is within 10 ms of the stated time
+  - Skill side (ADR-011): `loop-bed`, `stinger` and `seam-check`, no engine, edits through ffmpeg-skill; a fixture loop repeated 10 times passes this skill's `seam-check` at all nine seams and a naive one fails; whoosh / hit / rise stingers land within 10 ms. Open: qc-skill has no loop seam check (proposal to Velisa's ROADMAP), and no real ACE-Step / EzAudio output was looped
 - [ ] **8. Tempo-targeted generation and a tempo map** — GENERATE_BGM at a requested BPM and length, ending on a bar line, and the beat grid written as data beside the audio (no re-measuring needed downstream)
   - なぜ要るか：「120BPM、15秒」の文字PVに、ぴったり合う音楽と拍の情報を同時に渡せる
   - Done when: ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms

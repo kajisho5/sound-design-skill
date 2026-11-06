@@ -2,6 +2,14 @@
 
 ## 0.1.0 - unreleased
 
+Loopable beds, timed stingers and a seam check (roadmap step 7, ADR-011). No engine; edits through ffmpeg-skill only.
+
+- `sound-design loop-bed <in.wav> -o loop.wav --duration <s> [--search 1] [--crossfade 0.25] --json` (schema `sound-design/loop-bed@1`): the loop point is searched within `--search` s of `--duration`; the source's continuation is crossfaded into its start (ffmpeg-skill `cut`, `join`, `cut`), so the wrap is the source's own continuity; the wrap is measured and a failing one refused (`INVALID_RESULT`).
+- `sound-design stinger <in.wav> -o out.wav --duration <s> --peak-at <s> [--type whoosh|hit|rise|other] --json` (schema `sound-design/stinger@1`): exactly `--duration` long with its loudest 10 ms within 10 ms of `--peak-at`; cut, faded for 5 / 10 ms where cut short (ffmpeg-skill `audio`) and padded with digital silence; re-measured, refused otherwise.
+- `sound-design seam-check <file.wav> --period <s> | --seams <t,...> --json` (schema `sound-design/seam-check@1`, read-only, exit 1 on a failing seam): click within ±1 ms, level and octave-band spectrum of 1 s on each side. qc-skill has no loop seam check.
+- New `pcm.py`: a stdlib PCM WAV reader (8 / 16 / 24 / 32-bit, float, extensible) and the peak / seam / loop-point measurements. ffmpeg-skill `audio` (`--fade-in`, `--fade-out`) joins the tools used. Doctor lists `loop` and `stinger`; the contract lists the three tools, `policy.shaping` and `provenance.shaping_fields`.
+- Tests: `tests/test_shaping.py`, and an integration test in which a loop repeated ten times passes the seam check at all nine seams and a naive loop fails at every seam.
+
 ffmpeg-skill 3.0.0 (ADR-010).
 
 - ffmpeg-skill 3.x declares `contract_version` 2.0; it is read like 1.0, with no warning. Every tool and flag this skill uses is unchanged, and its `cut` calls always pass `--accurate`, so 3.0's new `cut.py` defaults do not reach it. The CI integration job also runs against 3.0.0, pinned by commit.

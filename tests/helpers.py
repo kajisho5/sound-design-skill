@@ -504,3 +504,64 @@ def write_tone_wav(path: str, seconds: float = 1.0, rate: int = 48000, freq: flo
         w.setframerate(rate)
         w.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * freq * i / rate))) for i in range(n)))
     return path
+
+
+def _write_pcm16(path: str, samples: Sequence[float], rate: int, channels: int) -> str:
+    import array
+    import wave
+    data = array.array("h", (max(-32767, min(32767, int(v * 32767))) for v in samples for _ in range(channels)))
+    if sys.byteorder == "big":
+        data.byteswap()
+    with wave.open(path, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(data.tobytes())
+    return path
+
+
+def write_bed_wav(path: str, seconds: float = 20.0, rate: int = 48000, bpm: float = 120.0, channels: int = 2,
+                  seed: int = 1) -> str:
+    """A stand-in music bed (roadmap step 7) that repeats exactly every two 4/4 bars, like a looped beat: two chords of
+    three harmonic-rich tones alternating every bar (frequencies whole multiples of 1 / (two bars), so they repeat
+    too), a decaying kick on every beat, and a seeded noise pad (low-passed and white) of two bars, tiled."""
+    import math
+    import random
+    rng = random.Random(seed)
+    beat = 60.0 / bpm
+    bar, period = 4 * beat, 8 * beat
+    q = 1.0 / period
+    chords = tuple(tuple(round(f / q) * q for f in c) for c in ((220.0, 277.18, 329.63), (196.0, 246.94, 293.66)))
+    pad, lp = [], 0.0
+    for _ in range(int(round(period * rate))):
+        w = rng.random() * 2 - 1
+        lp += 0.05 * (w - lp)
+        pad.append(0.25 * lp + 0.01 * w)
+    out = []
+    for i in range(int(seconds * rate)):
+        t = i / rate
+        ph = t % beat
+        v = 0.1 * sum(math.sin(2 * math.pi * f * t) + 0.4 * math.sin(4 * math.pi * f * t) + 0.2 * math.sin(6 * math.pi * f * t)
+                      for f in chords[int(t // bar) % 2]) / 3
+        v += 0.35 * math.exp(-ph * 25) * math.sin(2 * math.pi * 55 * ph) + pad[i % len(pad)]
+        out.append(v)
+    return _write_pcm16(path, out, rate, channels)
+
+
+def write_burst_wav(path: str, kind: str, seconds: float, at: float = 0.0, rate: int = 48000, seed: int = 2) -> str:
+    """Stand-in transition sounds (step 7), seeded noise under an envelope: "whoosh" swells to `at` and fades, "hit"
+    starts at `at` and decays, "rise" grows to the end."""
+    import math
+    import random
+    rng = random.Random(seed)
+    out = []
+    for i in range(int(seconds * rate)):
+        t = i / rate
+        if kind == "whoosh":
+            e = max(0.0, 1 - abs(t - at) / at) ** 2
+        elif kind == "hit":
+            e = 0.0 if t < at else math.exp(-(t - at) * 30)
+        else:
+            e = (t / seconds) ** 3
+        out.append(0.8 * e * (rng.random() * 2 - 1))
+    return _write_pcm16(path, out, rate, 1)

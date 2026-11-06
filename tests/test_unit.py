@@ -135,7 +135,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("ADR-005", c["engines"]["selection_adr"])
         ff = next(d for d in c["dependencies"] if d["id"] == "ffmpeg-skill")
         self.assertEqual(ff["flags"], {t: list(f) for t, f in FLAGS_USED.items()})
-        self.assertEqual(ff["tools"], ["probe", "cut", "join", "loudness"])     # cut / join / loudness: library mode (ADR-008)
+        # cut / join / loudness: library mode (ADR-008); audio: stinger fades (ADR-011)
+        self.assertEqual(ff["tools"], ["probe", "cut", "join", "loudness", "audio"])
         self.assertEqual(len(c["device"]["acestep_tiers"]), len(device.ACESTEP_TIERS))
         self.assertEqual(set(CAPABILITY_IDS), {"bgm", "sfx", "library"})
 
@@ -1285,7 +1286,7 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(d["unavailable_engines"], ENGINES)
         self.assertEqual(d["checks"]["ffmpeg_skill"]["status"], "MISSING")
         self.assertEqual((d["status"], d["ok"]), ("fail", False))
-        self.assertEqual(set(d["checks"]["operations"]), {"bgm", "sfx", "library"})
+        self.assertEqual(set(d["checks"]["operations"]), {"bgm", "sfx", "library", "loop", "stinger"})   # loop / stinger: ADR-011
         self.assertFalse(any(o["ready"] for o in d["checks"]["operations"].values()))
         sfx = d["checks"]["operations"]["sfx"]
         self.assertEqual((sfx["implemented"], sfx["engine"], sfx["engine_status"], sfx["roadmap_step"]), (True, "ezaudio", "MISSING", 3))

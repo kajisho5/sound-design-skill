@@ -14,11 +14,12 @@ import tempfile
 import unittest
 
 from helpers import (FFMPEG_SKILL_DIR, env, fake_acestep_engine, fake_checkpoints, fake_ezaudio_engine, no_engines_env, run_cli,
-                     write_tone_wav)
+                     write_bed_wav, write_burst_wav, write_tone_wav)
 
 from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
 from sound_design_skill.ffmpeg_skill import TOOLS_USED, FfmpegSkill
+from sound_design_skill import pcm
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
@@ -255,6 +256,60 @@ class LibraryIntegrationTests(unittest.TestCase):
         self.assertEqual((rc, refused["error"]["code"]), (2, "LICENCE_REQUIRED"))
         self.assertEqual(sorted(os.listdir(self.out)), ["bell.wav", "door.wav", "loop.wav", "loop2.wav", "trim.wav"])
         self.assertEqual([n for n in os.listdir(self.lib) if n.startswith(".")], [])
+
+
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class ShapingIntegrationTests(unittest.TestCase):
+    """Loopable beds and timed stingers through the CLI and the real ffmpeg-skill (ADR-011)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+
+    def cli(self, *argv):
+        return run_cli(*argv, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")
+
+    def test_a_loop_repeated_ten_times_passes_the_seam_check_and_a_naive_one_does_not(self):
+        bed = write_bed_wav(os.path.join(self.dir, "ベッド.wav"), seconds=12.0)
+        loop = os.path.join(self.dir, "loop.wav")
+        rc, doc = self.cli("loop-bed", bed, "-o", loop, "--duration", "8", "--search", "0.5")
+        self.assertEqual(rc, 0, doc)
+        self.assertEqual((doc["loop"]["length"], doc["loop"]["frames"]), (8.0, 384000))      # two bars of the fixture
+        self.assertGreater(doc["loop"]["similarity"], 0.99)
+        self.assertTrue(doc["seam"]["passed"])
+        self.assertAlmostEqual(float(self.skill.probe(loop)["duration"]), 8.0, delta=0.001)
+        x10 = os.path.join(self.dir, "x10.wav")
+        self.skill.join([loop] * 10, x10, 0.0)                                               # repeated end to end
+        self.assertEqual(pcm.read_wav(x10).frames, 10 * 384000)
+        rc, check = self.cli("seam-check", x10, "--period", str(doc["loop"]["length"]))
+        self.assertEqual((rc, check["passed"], len(check["seams"])), (0, True, 9), check["seams"])
+        for s in check["seams"]:
+            self.assertLess(s["click_ratio"], 2.0)
+            self.assertLess(s["level_delta_db"], 0.5)
+        naive = os.path.join(self.dir, "naive.wav")
+        self.skill.cut(bed, naive, duration=8.005)                                           # ends on a kick's peak
+        n10 = os.path.join(self.dir, "n10.wav")
+        self.skill.join([naive] * 10, n10, 0.0)
+        rc, bad = self.cli("seam-check", n10, "--period", "8.005")
+        self.assertEqual((rc, bad["passed"]), (1, False))
+        self.assertTrue(all(any(m.startswith("click") for m in s["reasons"]) for s in bad["seams"]), bad["seams"])
+
+    def test_stinger_peaks_land_within_10_ms(self):
+        for kind, secs, at, duration, peak_at in (("whoosh", 1.5, 0.6, 1.0, 0.5), ("hit", 1.2, 0.05, 2.0, 1.25),
+                                                  ("rise", 2.0, 0.0, 1.5, 1.2)):
+            with self.subTest(kind=kind):
+                src = write_burst_wav(os.path.join(self.dir, f"{kind}.wav"), kind, secs, at=at)
+                out = os.path.join(self.dir, f"stinger-{kind}.wav")
+                rc, doc = self.cli("stinger", src, "-o", out, "--duration", str(duration), "--peak-at", str(peak_at),
+                                   "--type", kind)
+                self.assertEqual(rc, 0, doc)
+                measured = pcm.read_wav(out)
+                self.assertEqual(measured.frames, int(round(duration * 48000)))
+                self.assertLessEqual(abs(pcm.peak(measured)["time"] - peak_at), 0.010)
+                self.assertAlmostEqual(float(self.skill.probe(out)["duration"]), duration, delta=0.001)
+                self.assertEqual(doc["provenance"]["engine"], None)
 
 
 if __name__ == "__main__":

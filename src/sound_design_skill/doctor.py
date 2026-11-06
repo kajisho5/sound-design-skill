@@ -23,11 +23,15 @@ from .ffmpeg_skill import FfmpegSkill
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
 # op -> implemented? / roadmap step; GENERATE_BGM since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006), library
-# mode since step 4 (ADR-008)
-IMPLEMENTED_OPS: Dict[str, bool] = {"bgm": True, "sfx": True, "library": True}
-OP_STEP = {"bgm": 2, "sfx": 3, "library": 4}
+# mode since step 4 (ADR-008), loop-bed and stinger since step 7 (ADR-011)
+IMPLEMENTED_OPS: Dict[str, bool] = {"bgm": True, "sfx": True, "library": True, "loop": True, "stinger": True}
+OP_STEP = {"bgm": 2, "sfx": 3, "library": 4, "loop": 7, "stinger": 7}
 NO_ENGINE_NOTE = {"library": "no engine (never ACE-Step or EzAudio): the user's own BGM / SFX files with a declared "
-                                "licence, chosen, fitted and measured through ffmpeg-skill (ADR-008)"}
+                                "licence, chosen, fitted and measured through ffmpeg-skill (ADR-008)",
+                  "loop": "no engine: a WAV the caller has, looped through ffmpeg-skill cut / join, its wrap measured "
+                          "(ADR-011)",
+                  "stinger": "no engine: a WAV the caller has, cut / faded / padded through ffmpeg-skill so its peak "
+                             "lands at a stated time (ADR-011)"}
 
 
 def engines_report(offline: bool = False) -> Dict[str, Any]:

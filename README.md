@@ -24,6 +24,7 @@ Music beds (BGM) and sound effects for the [AI Video Production OS](https://gith
 | GENERATE_BGM | `audio.bgm_generate` | ACE-Step 1.5 | 2 |
 | GENERATE_SFX | `audio.sfx_generate` | EzAudio ([ADR-005](docs/decisions.md)) | 3 |
 | Library mode | `audio.library_import` | none: your own files with a declared licence ([ADR-008](docs/decisions.md)) | 4 |
+| Loop beds, stingers, seam check | (tools `loop-bed`, `stinger`, `seam-check`) | none: a WAV you already have ([ADR-011](docs/decisions.md)) | 7 |
 
 ```bash
 pip install -e .                     # stdlib only, Python >= 3.9
@@ -37,6 +38,9 @@ sound-design library-import 朝のピアノ.wav --library ./sounds --licence CC-
   --kind bgm --tags piano --mood calm --loopable --json   # refused without --licence (LICENCE_REQUIRED)
 sound-design library-index ./sounds --loudness --json   # every file, its licence (declared / unknown) and measured length
 sound-design library-pick ./sounds --kind bgm --tags piano --duration 60 -o bed.wav --json   # chosen, looped / trimmed
+sound-design loop-bed bed.wav -o loop.wav --duration 8 --json          # end runs seamlessly into start; wrap measured
+sound-design stinger whoosh.wav -o st.wav --duration 1 --peak-at 0.5 --json   # exact length, peak on the cut (±10 ms)
+sound-design seam-check loop-x10.wav --period 8 --json                 # click / level / spectrum at every seam
 ```
 
 For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the user first (EzAudio) and how to report licences; tests keep it in step with the contract ([ADR-009](docs/decisions.md)).
@@ -75,6 +79,14 @@ Your own BGM and SFX (bought packs, commissioned tracks, CC0 / CC BY downloads) 
   - Fit: within max(0.1 s, 1 %) the file is used whole (a PCM WAV is copied byte for byte; other formats are converted). A longer file is trimmed (`cut --accurate`, no fade: MIX fades). A shorter file is looped only if it is marked `loopable`: copies joined with a crossfade (`--crossfade`, default 0.5 s, at most a quarter of the file) by `join`, then trimmed. A shorter file that is not loopable is excluded.
   - Output: ffmpeg-skill `probe` validates the WAV (length, rate, one audio stream) and `loudness --measure-only` measures it; nothing is normalised. One rename places it.
   - The result and its provenance carry the source file (path inside the library, SHA-256), the licence as declared, the selection rule and query, and the fit; `engine` is `null` and `ai_generated` is `false`. The WAV goes to audio-production-skill MIX with its licence and credit.
+
+## Loop beds and stingers ([ADR-011](docs/decisions.md))
+
+No engine runs: these take a WAV you already have and edit it through ffmpeg-skill (`cut`, `join`, `audio` fades) only.
+
+- **`loop-bed <in.wav> -o loop.wav --duration <s> [--search 1] [--crossfade 0.25]`.** The loop length L is searched within `--search` seconds of `--duration` for the point whose continuation looks most like the source's start (normalised cross-correlation). The loop is `crossfade(source[L, L+x] -> source[0, x]) ++ source[x, L]`, built as two cuts, a crossfaded join and a cut. Its last sample is the source's sample L - 1 and its first is sample L, so the wrap is the source's own continuity. The wrap is measured, and a failing one is refused (`INVALID_RESULT`).
+- **`stinger <in.wav> -o out.wav --duration <s> --peak-at <s> [--type whoosh|hit|rise]`.** The peak is the centre of the loudest 10 ms. The source is cut, given a 5 / 10 ms fade where it was cut short, and padded with digital silence (the only audio the skill writes itself), so the result is exactly `--duration` long with its peak at `--peak-at`. It is re-measured and refused unless the peak is within 10 ms.
+- **`seam-check <file.wav> --period <s> | --seams <t,...>`.** A click (the largest second difference within ±1 ms over the 99th percentile within ±50 ms, limit 3), the level (RMS of 1 s on each side, limit 1.5 dB) and the spectrum (octave bands, limit 6 dB) at every seam. Exit 1 when a seam fails. qc-skill has no loop seam check, so this is the skill's own.
 
 ## Engines (optional, [ADR-001](docs/decisions.md), [ADR-005](docs/decisions.md))
 
