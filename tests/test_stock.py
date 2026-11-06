@@ -19,7 +19,7 @@ from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
 from sound_design_skill.library import (MANIFEST_NAME, LibraryImportRequest, LibraryIndexRequest, LibraryPickRequest,
                                         library_import, library_index, library_pick, licence_info, licence_warnings)
-from sound_design_skill.provenance import sha256_text
+from sound_design_skill.provenance import sha256_file
 
 CC_BY_LINE = '"Morning Light" by Aiko Tanaka (https://example.invalid/track/42), licensed under CC-BY-4.0 ' \
              '(https://creativecommons.org/licenses/by/4.0/)'
@@ -71,7 +71,7 @@ class StockImportTests(unittest.TestCase):
         self.skill = tl.StubLibrarySkill()
         self.track = write_tone_wav(os.path.join(self.dl, "morning-light.wav"), seconds=6.0, rate=8000)
         self.text = os.path.join(self.dl, "LICENSE.txt")
-        with open(self.text, "w", encoding="utf-8") as fh:
+        with open(self.text, "w", encoding="utf-8", newline="\r\n") as fh:       # CRLF on every OS, as on Windows
             fh.write("Creative Commons Attribution 4.0 International\n...\n")
 
     def imp(self, src, **kw):
@@ -84,10 +84,9 @@ class StockImportTests(unittest.TestCase):
                        provider="Example Music", licence_url="https://creativecommons.org/licenses/by/4.0/",
                        licence_file=self.text, content_id="not-registered")
         entry = doc["entry"]
-        with open(self.text, encoding="utf-8") as fh:
-            sha = sha256_text(fh.read())
+        sha = sha256_file(self.text)                                      # the file as downloaded, byte for byte
         self.assertEqual((entry["licence_text_sha256"], entry["licence_file"]), (sha, f"licences/{sha}.txt"))
-        self.assertTrue(os.path.isfile(os.path.join(self.lib, "licences", f"{sha}.txt")))
+        self.assertEqual(sha256_file(os.path.join(self.lib, "licences", f"{sha}.txt")), sha)
         self.assertEqual((entry["title"], entry["provider"], entry["content_id"]), ("Morning Light", "Example Music",
                                                                                     "not-registered"))
         self.assertEqual(doc["licence"]["attribution"], CC_BY_LINE)

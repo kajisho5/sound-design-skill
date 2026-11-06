@@ -30,6 +30,7 @@ Every excluded file is reported with its reasons. The same library contents and 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -45,7 +46,7 @@ from . import SKILL_ID, __version__
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
 from .ops import check_output, tolerance_for, usable_skill
-from .provenance import build_library_provenance, sha256_file, sha256_text
+from .provenance import build_library_provenance, sha256_file
 
 MANIFEST_NAME = "sound-library.json"
 MANIFEST_SCHEMA = f"{SKILL_ID}/library@1"
@@ -511,8 +512,9 @@ def library_import(req: LibraryImportRequest, skill: Optional[FfmpegSkill] = Non
     }
 
 
-def _read_licence_text(path: Optional[str]) -> Optional[Tuple[str, str, str]]:
-    """(text, SHA-256 of its UTF-8 bytes, original name) of a licence text file the user downloaded with a track."""
+def _read_licence_text(path: Optional[str]) -> Optional[Tuple[bytes, str, str]]:
+    """(the file's bytes, their SHA-256, original name) of a licence text file the user downloaded with a track. The
+    bytes are kept exactly as downloaded (line endings included); they must be UTF-8 text."""
     if path is None:
         return None
     if not isinstance(path, str) or not os.path.isfile(path):
@@ -526,21 +528,21 @@ def _read_licence_text(path: Optional[str]) -> Optional[Tuple[str, str, str]]:
     if len(data) > MAX_LICENCE_TEXT or not text.strip():
         raise SoundDesignError("INVALID_ARGUMENT", "--licence-file must be non-empty text of at most 1 MiB",
                                {"licence_file": path})
-    return text, sha256_text(text), os.path.basename(path)
+    return data, hashlib.sha256(data).hexdigest(), os.path.basename(path)
 
 
-def _store_licence_text(library: str, licence: Tuple[str, str, str]) -> str:
-    """The licence text copied into <library>/licences/<sha256>.txt (one copy per distinct text); returns its
-    library-relative path."""
-    text, sha, _ = licence
+def _store_licence_text(library: str, licence: Tuple[bytes, str, str]) -> str:
+    """The licence file copied byte for byte into <library>/licences/<sha256>.txt (one copy per distinct file);
+    returns its library-relative path."""
+    data, sha, _ = licence
     rel = f"{LICENCE_DIR}/{sha}.txt"
     dst = os.path.join(library, LICENCE_DIR, f"{sha}.txt")
     if not os.path.isfile(dst):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".sound-design-", suffix=".txt", dir=os.path.dirname(dst))
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-                fh.write(text)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
             os.replace(tmp, dst)
         finally:
             if os.path.exists(tmp):
