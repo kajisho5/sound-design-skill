@@ -2,6 +2,10 @@
 
 ## 0.1.0 - unreleased
 
+Sound-effect cue sheet (roadmap step 9, ADR-013).
+
+- `sound-design sfx-cues [--cuts <t,...>] [--emphasis <t,...>] [--events <json>] [--library <dir>] [--effect cut|emphasis=<name>] [--file <name>=<wav>] [--min-spacing 0.25] [--level -12] [-o cues.json] --json` (schema `sound-design/sfx-cues@1`): one cue per caller time (none added, none moved; one closer than the spacing to the last kept cue is dropped with the reason), effects from the library (declared licence) or named WAVs, the effect's peak or onset on the time, `gain_db` to the level. For audio-production-skill MIX to place; nothing is mixed.
+
 Tempo-targeted GENERATE_BGM (roadmap step 8, ADR-012).
 
 - `generate-bgm --bpm <30-300> [--time-signature 2|3|4|6]`: the tempo and time signature go to ACE-Step as `GenerationParams.bpm` / `timesignature` (read at ca1e85fe), the length becomes the nearest whole number of bars inside the engine's range (120 BPM and 15 s become 16 s), and the beat grid is written beside the WAV as `<name>.beats.json` (schema `sound-design/beat-grid@1`) and returned as `tempo_map`. The grid is the requested one (`measured: false`); the engine's adherence is not measured.
