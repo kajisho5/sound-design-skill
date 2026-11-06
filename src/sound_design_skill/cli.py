@@ -2,7 +2,7 @@
 
 stdout: with --json exactly one JSON document, on success and failure alike, ASCII only (non-ASCII as \\u escapes,
 ADR-003), so it parses the same on any console code page. stderr: diagnostics only.
-Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exits errors.EXIT_CODES[code].
+Exit code: 0 on success; doctor exits 1 when its status is `fail`, seam-check when a seam fails; an error exits errors.EXIT_CODES[code].
 
   sound-design contract --json     the contract (alias: skill --json)
   sound-design doctor --json       engine, weights, device / GPU memory, ffmpeg-skill, ops [--offline] [--ffmpeg-skill DIR]
@@ -14,6 +14,9 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`; an error exit
   sound-design library-index <dir> [--loudness] --json                                                   (ADR-008)
   sound-design library-pick <dir> -o <out.wav> --kind bgm|sfx [--tags a,b] [--mood m] [--duration <s>] --json
                                                                                                          (ADR-008)
+  sound-design loop-bed <in.wav> -o <loop.wav> --duration <s> [--search 1] [--crossfade 0.25] --json      (ADR-011)
+  sound-design stinger <in.wav> -o <out.wav> --duration <s> --peak-at <s> [--type whoosh|hit|rise] --json (ADR-011)
+  sound-design seam-check <file.wav> --period <s> | --seams <t,t,...> --json                              (ADR-011)
 Library mode runs no engine (never ACE-Step or EzAudio) and refuses a file without a declared licence."""
 from __future__ import annotations
 
@@ -32,6 +35,10 @@ from .library import (DEFAULT_CROSSFADE, LibraryImportRequest, LibraryIndexReque
 from .library import DEFAULT_TIMEOUT as LIBRARY_TIMEOUT
 from .ops import SFX_DEVICES, SFX_TIMEOUT, BgmRequest, SfxRequest, generate_bgm, generate_sfx
 from .service import DEFAULT_TIMEOUT
+from .shaping import (DEFAULT_LOOP_CROSSFADE, DEFAULT_SEARCH, STINGER_TYPES, LoopBedRequest, SeamCheckRequest,
+                      StingerRequest, loop_bed, seam_check, stinger)
+from .shaping import DEFAULT_TIMEOUT as SHAPING_TIMEOUT
+from .pcm import SEAM_WINDOW
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,7 +127,45 @@ def build_parser() -> argparse.ArgumentParser:
     lp.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     lp.add_argument("--timeout", type=float, default=LIBRARY_TIMEOUT, help=f"per ffmpeg-skill tool (default {LIBRARY_TIMEOUT:g} s)")
     lp.add_argument("--json", action="store_true")
+    lb = sub.add_parser("loop-bed", help="a bed whose end runs seamlessly into its start (loop point searched, wrap "
+                                         "measured); no engine")
+    lb.add_argument("input", help="the source bed (at least --duration + --crossfade long; never modified)")
+    lb.add_argument("-o", "--output", required=True, help="output .wav (refused if it exists, unless --overwrite)")
+    lb.add_argument("--duration", type=float, required=True, help="loop length in seconds (1-600)")
+    lb.add_argument("--search", type=float, default=DEFAULT_SEARCH,
+                    help=f"look for the best loop point within +/- this many seconds (default {DEFAULT_SEARCH:g}; 0 = exact)")
+    lb.add_argument("--crossfade", type=float, default=DEFAULT_LOOP_CROSSFADE,
+                    help=f"seconds of the source's continuation blended into its start (default {DEFAULT_LOOP_CROSSFADE:g})")
+    lb.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
+    lb.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    lb.add_argument("--timeout", type=float, default=SHAPING_TIMEOUT, help=f"per ffmpeg-skill tool (default {SHAPING_TIMEOUT:g} s)")
+    lb.add_argument("--json", action="store_true")
+    st = sub.add_parser("stinger", help="a transition sound of an exact length with its peak at a stated time; no engine")
+    st.add_argument("input", help="the source sound (a whoosh, hit or rise; never modified)")
+    st.add_argument("-o", "--output", required=True, help="output .wav (refused if it exists, unless --overwrite)")
+    st.add_argument("--duration", type=float, required=True, help="exact length in seconds (up to 30)")
+    st.add_argument("--peak-at", type=float, required=True, help="seconds from the start where the peak lands (the cut)")
+    st.add_argument("--type", choices=STINGER_TYPES, default="other", help="what it is (recorded)")
+    st.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
+    st.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    st.add_argument("--timeout", type=float, default=SHAPING_TIMEOUT, help=f"per ffmpeg-skill tool (default {SHAPING_TIMEOUT:g} s)")
+    st.add_argument("--json", action="store_true")
+    sc = sub.add_parser("seam-check", help="click, level and spectrum across each seam of a WAV (read-only)")
+    sc.add_argument("input", help="the file (e.g. a loop repeated end to end)")
+    sc.add_argument("--period", type=float, help="a seam every this many seconds")
+    sc.add_argument("--seams", type=_time_list, default=[], help="comma-separated seam times in seconds")
+    sc.add_argument("--window", type=float, default=SEAM_WINDOW, help=f"seconds compared on each side (default {SEAM_WINDOW:g})")
+    sc.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    sc.add_argument("--timeout", type=float, default=SHAPING_TIMEOUT, help=f"per ffmpeg-skill tool (default {SHAPING_TIMEOUT:g} s)")
+    sc.add_argument("--json", action="store_true")
     return ap
+
+
+def _time_list(text: str) -> list:
+    try:
+        return [float(t) for t in text.split(",") if t.strip()]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected comma-separated seconds, got {text!r}")
 
 
 def _tag_list(text: str) -> list:
@@ -189,6 +234,22 @@ def _human(doc: Dict[str, Any]) -> None:
               f"{doc['licence']['licence']} (declared, not verified)")
         for w in doc.get("warnings") or []:
             print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/loop-bed@1"):
+        lp, sm = doc["loop"], doc["seam"]
+        print(f"{doc['output']['path']}: loop {lp['length']:.3f}s (similarity {lp['similarity']:.2f}); wrap click "
+              f"{sm['click_ratio']:.2f}, level {sm['level_delta_db']:.2f} dB, spectrum {sm['spectrum_delta_db']:.2f} dB")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/stinger@1"):
+        t = doc["timing"]
+        print(f"{doc['output']['path']}: {t['duration']:.3f}s, peak at {t['peak']['time']:.3f}s "
+              f"(asked {t['peak_at']:.3f}s, error {t['peak_error'] * 1000:+.1f} ms)")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
+    elif doc.get("schema", "").endswith("/seam-check@1"):
+        print(f"{doc['file']['name']}: {'passed' if doc['passed'] else 'FAILED'} ({len(doc['seams'])} seams)")
+        for s in doc["seams"]:
+            print(f"  {s['time']:.3f}s: {'ok' if s['passed'] else '; '.join(s['reasons'])}")
     elif "engines" in doc and "skill_id" not in doc:
         for eid, e in doc["engines"].items():
             print(f"{eid:17} {e['status']:12} {e.get('version') or '-':10} code {e['code_license']}; "
@@ -254,6 +315,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                   crossfade=args.crossfade, overwrite=args.overwrite,
                                                   ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
             return 0
+        if args.cmd == "loop-bed":
+            _emit(loop_bed(LoopBedRequest(input_path=args.input, output_path=args.output, duration=args.duration,
+                                          search=args.search, crossfade=args.crossfade, overwrite=args.overwrite,
+                                          ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
+            return 0
+        if args.cmd == "stinger":
+            _emit(stinger(StingerRequest(input_path=args.input, output_path=args.output, duration=args.duration,
+                                         peak_at=args.peak_at, type=args.type, overwrite=args.overwrite,
+                                         ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
+            return 0
+        if args.cmd == "seam-check":
+            doc = seam_check(SeamCheckRequest(input_path=args.input, period=args.period, seams=args.seams, window=args.window,
+                                              ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout))
+            _emit(doc, as_json)
+            return 0 if doc["passed"] else 1
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)
         return e.exit_code

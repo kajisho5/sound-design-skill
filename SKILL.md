@@ -1,6 +1,6 @@
 ---
 name: sound-design-skill
-description: Music beds (BGM) and sound effects for a video, as WAV files with full provenance, handed to audio-production-skill MIX - generated locally (ACE-Step 1.5 for BGM, EzAudio for SFX, both optional installs, never downloaded) or chosen, trimmed and looped from the user's own library with a declared licence (no engine). Use when asked to make background music or a music bed of a given length and mood, a sound effect (a door, footsteps, a whoosh), to build or search a folder of licensed BGM / SFX, or to fit a library track to a scene. EzAudio runs only after the user has been told about its training data. All ops are EXPERIMENTAL; nothing is mixed here.
+description: Music beds (BGM) and sound effects for a video, as WAV files with full provenance, handed to audio-production-skill MIX - generated locally (ACE-Step 1.5 for BGM, EzAudio for SFX, both optional installs, never downloaded) or chosen, trimmed and looped from the user's own library with a declared licence (no engine); seamless loop beds and transition stingers timed to a cut. Use when asked to make background music or a music bed of a given length and mood, a sound effect (a door, footsteps, a whoosh), a loopable bed or a stinger that lands on a cut, to build or search a folder of licensed BGM / SFX, or to fit a library track to a scene. EzAudio runs only after the user has been told about its training data. All ops are EXPERIMENTAL; nothing is mixed here.
 ---
 
 # sound-design-skill
@@ -15,6 +15,9 @@ Run `sound-design <command> ... --json` (installed by `pip install -e .`, Python
 | Add the user's own file to a library | `sound-design library-import track.wav --library ./sounds --licence CC-BY-4.0 --credit "Music: name" --kind bgm --tags piano --mood calm --loopable --json` |
 | What is in a library, with licences and lengths | `sound-design library-index ./sounds --loudness --json` |
 | A library track fitted to 60 s | `sound-design library-pick ./sounds --kind bgm --tags piano --duration 60 -o bed.wav --json` (add `--file <path>` to name the track, `--crossfade 0.5` for loops) |
+| A seamless 8 s loop of a bed (for loops in an edit) | `sound-design loop-bed bed.wav -o loop.wav --duration 8 --search 1 --json` (source at least duration + crossfade long; the loop point is searched within `--search` s) |
+| A 1 s whoosh whose peak lands on the cut at 0.5 s | `sound-design stinger whoosh.wav -o stinger.wav --duration 1 --peak-at 0.5 --type whoosh --json` |
+| Check the seams of a looped file | `sound-design seam-check loop-x10.wav --period 8 --json` (or `--seams 8,16`; exit 1 when a seam fails) |
 | What is installed | `sound-design doctor --json`, `sound-design engines --json` |
 | What this skill declares | `sound-design contract --json` (alias `skill --json`) |
 
@@ -25,6 +28,13 @@ Every op takes `--timeout S` and `--ffmpeg-skill DIR`; those that write a file t
 - **The user has music or effects with a known licence** (bought packs, commissioned tracks, CC0 / CC BY): library mode first. `library-import` each file with its licence, then `library-pick` for each scene. No engine runs and nothing is AI-generated (`ai_generated: false`).
 - **Nothing suitable in the library:** `generate-bgm` (ACE-Step) or `generate-sfx` (EzAudio), if `doctor` shows the engine `OK`.
 - **Then always** hand the WAV and its `provenance` to audio-production-skill MIX, which places it, ducks it under speech and sets the loudness. This skill does not mix, duck or normalise.
+
+## Loops and stingers
+
+- `loop-bed` and `stinger` run no engine. They take a WAV you already have (a `generate-bgm`, `generate-sfx` or `library-pick` result, or the user's file), edit it through ffmpeg-skill only, and measure the result; its licence and engine stay in the source's own provenance, so pass both on.
+- A loop's end runs into its start with no click: repeat it end to end, with no crossfade. The result reports the loop length it found (`loop.length`, within `--search` of `--duration`), how alike the crossfaded material is (`loop.similarity`; a warning below 0.5) and the measured wrap (`seam`). A whole number of bars loops best.
+- A stinger is exactly `--duration` long and its loudest 10 ms is within 10 ms of `--peak-at` (at least 20 ms from either end), else nothing is written. Tell MIX to start it `--peak-at` seconds before the cut.
+- `seam-check` is this skill's own loop check: click (±1 ms), level and octave-band spectrum of 1 s on each side. qc-skill has no loop seam check yet.
 
 ## Ask the user before EzAudio
 

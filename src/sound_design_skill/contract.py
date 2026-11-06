@@ -13,6 +13,8 @@ from .engines.acestep import DEVICES
 from .errors import ERROR_TABLE
 from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .provenance import ENGINE_FIELDS
+from . import pcm
+from . import shaping
 
 CONTRACT_VERSION = "1.0"
 CAPABILITY_IDS = {"bgm": "audio.bgm_generate", "sfx": "audio.sfx_generate", "library": "audio.library_import"}
@@ -83,6 +85,42 @@ _LIBRARY_TOOLS = [
 ]
 
 
+_SHAPING_TOOLS = [
+    {"tool_id": f"{SKILL_ID}/loop-bed", "role": "shaping", "writes_media": True, "mutates_input": False,
+     "deterministic": True, "implemented": True, "roadmap_step": 7, "engine": None, "engines": [],
+     "description": "A bed whose end runs seamlessly into its start, for loops in an edit: the loop point is searched "
+                    "near --duration for the place whose continuation best matches the source's start, the "
+                    "continuation is crossfaded into the start (ffmpeg-skill cut / join), and the wrap is measured "
+                    "(click, level, spectrum) and refused if it fails; no engine (ADR-011)",
+     "inputs": ["source WAV (a generate-bgm / library-pick result or the user's file), at least duration + crossfade",
+                "loop length in seconds", "search window", "crossfade"],
+     "argv": ["loop-bed", "<in.wav>", "-o <loop.wav>", "--duration <seconds>", f"[--search {shaping.DEFAULT_SEARCH:g}]",
+              f"[--crossfade {shaping.DEFAULT_LOOP_CROSSFADE:g}]", "[--overwrite]", "[--ffmpeg-skill <dir>]",
+              "[--timeout 600]", "--json"],
+     "schema": shaping.LOOP_SCHEMA,
+     "construction": "crossfade(source[L, L + x] -> source[0, x]) ++ source[x, L]: the loop's last sample is "
+                     "source[L - 1] and its first source[L]"},
+    {"tool_id": f"{SKILL_ID}/stinger", "role": "shaping", "writes_media": True, "mutates_input": False,
+     "deterministic": True, "implemented": True, "roadmap_step": 7, "engine": None, "engines": [],
+     "description": "A transition sound (whoosh, hit, rise) of exactly --duration seconds whose peak (the loudest 10 ms) "
+                    "is at --peak-at seconds, so it lands on the cut: cut through ffmpeg-skill (5 / 10 ms fades where it "
+                    "was cut short), padded with digital silence, re-measured; refused unless the peak is within "
+                    f"{shaping.PEAK_TOLERANCE * 1000:g} ms and the length exact; no engine (ADR-011)",
+     "inputs": ["source sound", "exact duration in seconds", "peak time in seconds", "type (recorded)"],
+     "argv": ["stinger", "<in.wav>", "-o <out.wav>", "--duration <seconds>", "--peak-at <seconds>",
+              f"[--type {'|'.join(shaping.STINGER_TYPES)}]", "[--overwrite]", "[--ffmpeg-skill <dir>]",
+              "[--timeout 600]", "--json"],
+     "schema": shaping.STINGER_SCHEMA, "peak_tolerance_s": shaping.PEAK_TOLERANCE, "peak": pcm.PEAK_WINDOW},
+    {"tool_id": f"{SKILL_ID}/seam-check", "role": "diagnostic", "writes_media": False, "mutates_input": False,
+     "deterministic": True, "implemented": True, "roadmap_step": 7, "engine": None, "engines": [],
+     "description": "Click, level and spectrum across each seam of a WAV (every --period seconds and / or at --seams); "
+                    "exit 1 when a seam fails; read-only. The loop seam check qc-skill does not have (ADR-011)",
+     "argv": ["seam-check", "<file.wav>", "[--period <seconds>]", "[--seams <t,t,...>]",
+              f"[--window {pcm.SEAM_WINDOW:g}]", "[--ffmpeg-skill <dir>]", "[--timeout 600]", "--json"],
+     "schema": shaping.SEAM_SCHEMA, "limits": pcm.seam_limits(), "method": shaping.SEAM_METHOD},
+]
+
+
 def tools() -> list:
     out = []
     for op, spec in _OP_TOOLS.items():
@@ -92,6 +130,7 @@ def tools() -> list:
                     "roadmap_step": OP_STEP[op], "engine": DEFAULT_ENGINE.get(op), "engines": engines_for(op),
                     "confirmation_required": confirmation_for(op) is not None, "confirmation": confirmation_for(op), **spec})
     out += [dict(t) for t in _LIBRARY_TOOLS]
+    out += [dict(t) for t in _SHAPING_TOOLS]
     out += [
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engine, weights, ffmpeg-skill), compute device and "
@@ -135,7 +174,9 @@ def contract() -> Dict[str, Any]:
                          "music recognition, licence clearance or copyright checks of generated music",
                          "downloading engines or model weights (one-time manual step; doctor says how)",
                          "network access at run time", "direct ffmpeg calls (every media step is an ffmpeg-skill tool)"],
-        "handoff": {"bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme",
+        "handoff": {"loop": "the editor or audio-production-skill MIX repeats the loop end to end (no crossfade)",
+                    "stinger": "audio-production-skill MIX places the stinger starting peak_at seconds before the cut",
+                    "bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme",
                     "sfx": "audio-production-skill MIX places the generated effect (with its provenance) in the programme",
                     "library": "audio-production-skill MIX places the fitted library WAV (with its provenance, licence and "
                                "credit) in the programme"},
@@ -161,6 +202,10 @@ def contract() -> Dict[str, Any]:
                                       "declared with verified: false; nothing is inferred or cleared (ADR-008)",
                    "library_engine": "library mode runs no engine (never ACE-Step or EzAudio, no worker) and downloads "
                                      "nothing; every media step is an ffmpeg-skill tool (ADR-008)",
+                   "shaping": "loop-bed and stinger run no engine; they edit a WAV the caller already has through "
+                              "ffmpeg-skill only, measure the result from its samples, and refuse a result that fails "
+                              "its measurement (a loop's wrap, a stinger's peak time and length); the only audio written "
+                              "by this skill itself is digital silence used as stinger padding (ADR-011)",
                    "confirmation": "an engine whose spec names a confirmation_flag (EzAudio: "
                                    f"{ezaudio.ACK_FLAG}) is refused with CONFIRMATION_REQUIRED before any work unless "
                                    "the caller passes that flag; an orchestrator surfaces it as a CONFIRM step, tells the "
@@ -175,6 +220,9 @@ def contract() -> Dict[str, Any]:
                                           "licence.verified", "licence.credit", "selection.rule", "selection.query",
                                           "fit.mode", "duration.requested", "duration.measured", "output.sha256",
                                           "ffmpeg_skill.version", "network"],
+                       "shaping_fields": ["skill", "op", "engine (null)", "ai_generated (as the source)",
+                                          "source.file", "source.sha256", "source.measured", "parameters", "result",
+                                          "output.sha256", "ffmpeg_skill.version", "network"],
                        "status": "OBSERVED"},
         "execution": {"canonical_invocation": ["sound-design", "<command>", "...", "--json"], "network": False, "shell": False,
                       "engine_process": "worker subprocess in its own process group (under the engine's own interpreter "

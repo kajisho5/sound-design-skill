@@ -16,6 +16,8 @@ Which ffmpeg-skill tools are used, and for what (the roadmap's wiring):
   join      library mode: N copies of a loopable library file joined with a crossfade, before the trim
   loudness  library mode: --measure-only, the EBU R128 integrated loudness / true peak / LRA of a library file and of
             the fitted output (measured and reported, never normalised here: loudness targets are MIX's)
+  audio     stingers (step 7, ADR-011): --fade-in / --fade-out of a few milliseconds where a sound was cut short to
+            reach an exact length, so the cut does not click
 """
 from __future__ import annotations
 
@@ -35,14 +37,15 @@ from .procs import TIMEOUT_EXIT, run_process_group
 KNOWN_CONTRACT_VERSIONS = ("1.0", "2.0")
 SUPPORTED_CONTRACT_VERSION = KNOWN_CONTRACT_VERSIONS[0]
 ENV_DIR_KEYS = ("SOUND_DESIGN_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
-TOOLS_USED = ("probe", "cut", "join", "loudness")
+TOOLS_USED = ("probe", "cut", "join", "loudness", "audio")
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "probe": ("inputs",),
     "cut": ("input", "output", "start", "duration", "accurate", "json"),
     "join": ("inputs", "output", "duration", "transition", "json"),
     "loudness": ("input", "measure_only", "json"),
+    "audio": ("input", "output", "fade_in", "fade_out", "json"),
 }
-AUDIO_ONLY_TOOLS = ("probe", "cut", "join", "loudness")
+AUDIO_ONLY_TOOLS = ("probe", "cut", "join", "loudness", "audio")
 
 
 @dataclass
@@ -190,6 +193,16 @@ class FfmpegSkill:
         args = [os.path.abspath(p) for p in inputs]
         args += ["--transition", "none"] if crossfade <= 0 else ["--transition", "fade", "--duration", f"{crossfade:.6f}"]
         return self._tool("join", args + ["-o", os.path.abspath(dst)], timeout)
+
+    def fade(self, src: str, dst: str, fade_in: float = 0.0, fade_out: float = 0.0,
+             timeout: Optional[float] = None) -> Dict[str, Any]:
+        """A fade-in at the start and / or a fade-out at the end (seconds), written to `dst` (PCM WAV)."""
+        args = [os.path.abspath(src)]
+        if fade_in > 0:
+            args += ["--fade-in", f"{fade_in:.6f}"]
+        if fade_out > 0:
+            args += ["--fade-out", f"{fade_out:.6f}"]
+        return self._tool("audio", args + ["-o", os.path.abspath(dst)], timeout)
 
     def loudness(self, path: str, timeout: Optional[float] = None) -> Dict[str, Any]:
         """EBU R128 measurement only (`--measure-only`): integrated LUFS, true peak dBTP and LRA, as numbers (None when

@@ -499,3 +499,36 @@ published contract does not change.
 **Python / FFmpeg / CI.** No job combined ffmpeg-skill with Python 3.9. The unit jobs (3.9 / 3.12) never run it.
 The integration job runs Python 3.12 on ubuntu-24.04 (FFmpeg 6.1), and becomes a matrix over ffmpeg-skill main and
 3.0.0 (pinned by commit). Python 3.9 stays supported by this skill.
+
+## ADR-011 Loopable beds, timed stingers and a seam check: no engine, edits through ffmpeg-skill, results measured from their samples
+
+**Context.** Roadmap step 7 (field review 2026-11-05): a BGM bed with a seamless loop point (measured: no click, matching level and spectrum across the seam) for loops in an edit, and stinger sounds (whoosh, hit, rise) of an exact length with their peak at a stated time, so a transition's sound lands on its cut point. Done when a looped bed repeated 10 times passes qc-skill's loop seam check, and a stinger's peak is within 10 ms of the stated time. The stinger is an editing transition, not a live-streaming one.
+
+**What was found.**
+- qc-skill (main, v1.0.0) has no loop seam check: no check measures a click, level or spectrum across a seam. qc-skill is another repository's and is not changed here.
+- No ffmpeg-skill tool reports where a sound peaks or how a seam measures, and `loop` refuses audio-only input (ADR-008). `cut --accurate` and `join` on PCM WAV are sample-exact (checked on 3.1.8 and 3.0.0); `join --transition fade` is a linear (`tri`) crossfade and refuses an input shorter than twice the crossfade.
+
+**Decision.**
+- **Three tools, no engine.** `loop-bed`, `stinger` and `seam-check` take a WAV the caller already has (a `generate-bgm`, `generate-sfx` or `library-pick` result, or the user's file). They import no engine, no worker and no network module (a unit test scans `shaping.py` and `pcm.py`). Their provenance (`build_shaping_provenance`) records the source by file name and SHA-256, the parameters and the measurements, `engine: null`, and that whether the audio is generated, and its licence, is in the source's own provenance. Doctor lists `loop` and `stinger` under `checks.operations` with no engine; the contract lists the three tools (role `shaping` / `diagnostic`), `policy.shaping` and `provenance.shaping_fields`. No new capability id: they work on what the existing capabilities produce.
+- **Edits only through ffmpeg-skill.** The source is first converted to PCM WAV by `cut --accurate`. Loops use `cut` and `join`; stingers use `cut`, `join --transition none` and `audio --fade-in / --fade-out`. `audio` joins `TOOLS_USED` with `input`, `output`, `fade_in`, `fade_out` and `json`, checked against the live contract like the others. The only audio this skill writes itself is digital silence (zero samples, 16-bit PCM) used to pad a stinger.
+- **Measurement from the samples (`pcm.py`).** A stdlib reader for PCM WAV (8 / 16 / 24 / 32-bit integer, 32-bit float, `WAVE_FORMAT_EXTENSIBLE`), averaged to mono. No ffmpeg runs here; the files read are ones ffmpeg-skill just wrote.
+- **`loop-bed <in> -o <out> --duration <s> [--search 1] [--crossfade 0.25]`.**
+  - Loop point: L within `--search` of `--duration` whose next x = `--crossfade` seconds best match the source's first x seconds (normalised cross-correlation; block averages at about 2 kHz, then sample by sample). Candidates within 0.02 of the best count as equal and the one nearest `--duration` wins, so a periodic bed loops at the requested length.
+  - Construction: A = source[L - 2x, L + x], B = source[0, L], J = `join(A, B)` with an x-second crossfade, loop = J[2x, 2x + L] = crossfade(source[L, L + x] -> source[0, x]) ++ source[x, L]. Its last sample is source[L - 1] and its first source[L], so the wrap is the source's own continuity; A is 3x long, so `join`'s 2x minimum holds.
+  - Validation: `probe`, exactly L samples (±1), the wrap measured by the seam check (the last and first second, joined in memory). A failing wrap is `INVALID_RESULT` and nothing is written. Warnings: similarity below 0.5 (the crossfade blends material that differs), and a loop length other than the request.
+- **`stinger <in> -o <out> --duration <s> --peak-at <s> [--type whoosh|hit|rise|other]`.**
+  - The peak is the centre of the loudest 10 ms RMS window, in 1 ms steps (`pcm.peak`; the sample peak is reported too).
+  - Plan (`plan_stinger`, pure): cut the source's head when its peak comes later than `--peak-at`, pad silence before it when earlier, keep at most what fits, pad silence after. Where the sound was cut short, a 5 ms fade-in / 10 ms fade-out (`audio`) keeps the cut from clicking.
+  - Validation: `probe`, exactly `--duration` samples (±1), and the measured peak within 10 ms of `--peak-at`; else `INVALID_RESULT`. `--peak-at` must be at least 20 ms from either end (the 10 ms window and the 10 ms fade). `--duration` is at most 30 s.
+- **`seam-check <file> --period <s> | --seams <t,...> [--window 1]`** (read-only, exit 1 when a seam fails), the check qc-skill lacks:
+  - click: the largest |second difference| within ±1 ms of the seam over the 99th percentile within ±50 ms; at most 3;
+  - level: RMS of `--window` seconds on each side; at most 1.5 dB apart;
+  - spectrum: octave-band levels (Welch: 512-point Hann frames of the signal averaged to about 12 kHz) of the same windows, over bands within 30 dB of the loudest; at most 6 dB apart in any band;
+  - both sides below -60 dBFS: the seam passes (nothing to hear).
+  One-second windows are long enough that the music's own beat-level movement (a kick right after the seam) averages out, and short enough to catch a quiet outro looping into a loud intro. A shorter first attempt (0.25 s windows) failed every musical seam on the kick after it; that is recorded so the window is not shortened again without a reason.
+
+**Tests.**
+- Unit (`tests/test_shaping.py`, a stub ffmpeg-skill on PCM WAVs): the reader (16-bit, 24-bit extensible, float, refusals), silence and peaks, seams (continuous passes; a phase jump is a click; a level drop and a four-octave move fail; silence passes; an edge seam is reported), the loop-point search on repeated noise, the stinger plan, `loop-bed` end to end (the wrap equals the source's samples L - 1 and L; ten repeats pass), refusals, stingers of each type within 10 ms, a naive loop failing, the CLI and exit 1, contract and doctor fields, no engine.
+- Integration (real ffmpeg-skill): a 12 s fixture bed repeating every two bars gives an 8.000 s loop (384000 samples, similarity > 0.99); ten copies joined end to end by `join` pass `seam-check` at all nine seams; a naive 8.005 s cut repeated ten times fails at every seam with a click. A whoosh, a hit and a rise each land within 10 ms of `--peak-at` at an exact length.
+
+**Not done (roadmap step 7 stays open).** The Done-when names qc-skill's loop seam check, which does not exist; ten repeats pass this skill's own check, not qc-skill's. The proposal for qc-skill (a loop seam check measuring what `seam-check` measures) goes to Velisa's ROADMAP. Real ACE-Step / EzAudio output was not looped or measured (no engine installed here).
