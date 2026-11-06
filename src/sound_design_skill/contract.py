@@ -14,6 +14,7 @@ from .errors import ERROR_TABLE
 from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .provenance import ENGINE_FIELDS
 from . import pcm
+from . import tempo
 from . import shaping
 
 CONTRACT_VERSION = "1.0"
@@ -25,11 +26,18 @@ _OP_TOOLS = {
             "inputs": ["prompt and / or tags (joined into one caption, < 512 characters)", "duration in seconds (engine range)",
                        "seed (drawn when omitted; always recorded)"],
             "argv": ["generate-bgm", "--prompt <text>", "[--tags <a,b,...>]", "--duration <seconds>", "-o <out.wav>",
-                     "[--seed <int>]", "[--engine acestep]", "[--lyrics <file>]", f"[--device {'|'.join(DEVICES)}]",
+                     "[--seed <int>]", f"[--bpm <{tempo.BPM_RANGE[0]}-{tempo.BPM_RANGE[1]}>]",
+                     "[--time-signature " + "|".join(map(str, tempo.TIME_SIGNATURES)) + "]", "[--engine acestep]", "[--lyrics <file>]", f"[--device {'|'.join(DEVICES)}]",
                      "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
             "schema": "sound-design/generate-bgm@1",
             "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
-            "language_model": "off (Qwen3 base-model licences unverified; ADR-004)"},
+            "language_model": "off (Qwen3 base-model licences unverified; ADR-004)",
+            "tempo": {"flags": ["--bpm", "--time-signature"], "engine_params": "GenerationParams.bpm (int) / timesignature",
+                      "duration": "with --bpm: the whole number of bars nearest --duration (a half bar rounds up), inside "
+                                  "the engine's range, so the bed ends on a bar line",
+                      "beat_grid": f"<output>{tempo.GRID_SUFFIX} beside the WAV (schema {tempo.GRID_SCHEMA}) and "
+                                   "tempo_map in the result: every beat, downbeats, bar lines; first beat assumed at 0 s; "
+                                   "measured: false (ADR-012)"}},
     "sfx": {"description": "A sound effect from a prompt / tags, a duration in whole seconds and a seed (EzAudio, mono "
                            "24 kHz); validated through ffmpeg-skill/probe and placed with one rename",
             "inputs": ["prompt and / or tags (joined, < 512 characters; the text encoder reads 100 tokens)",

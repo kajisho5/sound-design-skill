@@ -8,6 +8,7 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`, seam-check wh
   sound-design doctor --json       engine, weights, device / GPU memory, ffmpeg-skill, ops [--offline] [--ffmpeg-skill DIR]
   sound-design engines --json      registered engines with status and licences [--offline]
   sound-design generate-bgm --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-004)
+                            [--bpm N [--time-signature 4]]: whole bars, <out>.beats.json beside it      (ADR-012)
   sound-design generate-sfx --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N]
                             --acknowledge-ezaudio-training-data --json                                  (ADR-006, ADR-007)
   sound-design library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx [--tags a,b] --json (ADR-008)
@@ -62,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--duration", type=float, required=True, help="seconds (the engine's range; ACE-Step 10-600)")
     b.add_argument("-o", "--output", required=True, help="output .wav (refused if it exists, unless --overwrite)")
     b.add_argument("--seed", type=int, help="integer in [0, 2**32); drawn and recorded when omitted")
+    b.add_argument("--bpm", type=int, help="tempo, 30-300: the length becomes whole bars and a beat grid is written beside "
+                                         "the WAV as <name>.beats.json (ADR-012)")
+    b.add_argument("--time-signature", type=int, choices=(2, 3, 4, 6), help="beats per bar with --bpm: 2, 3, 4 (default) or "
+                                                                            "6 (6/8)")
     b.add_argument("--lyrics", help="UTF-8 lyrics file (default: instrumental)")
     b.add_argument("--engine", help="engine id (default: acestep)")
     b.add_argument("--device", choices=DEVICES, default="auto", help="compute device passed to the engine (default auto)")
@@ -208,6 +213,9 @@ def _human(doc: Dict[str, Any]) -> None:
         out = doc["output"]
         print(f"{out['path']}: {out['duration']:.2f}s, {out['sample_rate']} Hz, {out['channels']} ch; seed "
               f"{doc['request']['seed']} ({doc['request']['seed_source']}); engine {doc['engine']['id']} {doc['engine']['version']}")
+        if doc.get("tempo_map"):
+            t = doc["tempo_map"]
+            print(f"  {t['bpm']} BPM {t['time_signature']}, {t['bars']} bars; beat grid {t['path']}")
         if doc.get("confirmation"):
             c = doc["confirmation"]
             print(f"  acknowledged: {c['flag']} at {c['acknowledged_at']}")
@@ -289,7 +297,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(generate_bgm(BgmRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,
                                           seed=args.seed, lyrics_path=args.lyrics, engine=args.engine, device=args.device,
                                           timeout=args.timeout, overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
-                                          offline=args.offline)), as_json)
+                                          offline=args.offline, bpm=args.bpm, time_signature=args.time_signature)), as_json)
             return 0
         if args.cmd == "generate-sfx":
             _emit(generate_sfx(SfxRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,

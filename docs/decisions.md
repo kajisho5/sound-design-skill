@@ -532,3 +532,24 @@ The integration job runs Python 3.12 on ubuntu-24.04 (FFmpeg 6.1), and becomes a
 - Integration (real ffmpeg-skill): a 12 s fixture bed repeating every two bars gives an 8.000 s loop (384000 samples, similarity > 0.99); ten copies joined end to end by `join` pass `seam-check` at all nine seams; a naive 8.005 s cut repeated ten times fails at every seam with a click. A whoosh, a hit and a rise each land within 10 ms of `--peak-at` at an exact length.
 
 **Not done (roadmap step 7 stays open).** The Done-when names qc-skill's loop seam check, which does not exist; ten repeats pass this skill's own check, not qc-skill's. The proposal for qc-skill (a loop seam check measuring what `seam-check` measures) goes to Velisa's ROADMAP. Real ACE-Step / EzAudio output was not looped or measured (no engine installed here).
+
+## ADR-012 Tempo-targeted GENERATE_BGM: whole bars at a requested BPM, the beat grid written beside the audio
+
+**Context.** Roadmap step 8: GENERATE_BGM at a requested BPM and length, ending on a bar line, with the beat grid written as data beside the audio so nothing downstream has to measure it again. Done when ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms. Example from the field review: a 120 BPM, 15 s lyric video.
+
+**What the engine takes.** ACE-Step 1.5 at ca1e85fe (`acestep/inference.py`, read for this ADR): `GenerationParams.bpm` (`Optional[int]`, "30 ~ 300") and `GenerationParams.timesignature` (`"2"`, `"3"`, `"4"` or `"6"` for 2/4, 3/4, 4/4, 6/8). `generate_music` passes both to `dit_handler.generate_music` whether or not the LM runs, so they reach the DiT with the LM off (ADR-004). The fake engine in `tests/helpers.py` gains the two fields (and `keyscale`) as declared there.
+
+**Decision.**
+- `generate-bgm --bpm <int 30-300> [--time-signature 2|3|4|6]` (`BgmRequest.bpm`, `time_signature`; 4 by default with `--bpm`; `--time-signature` alone is `INVALID_ARGUMENT`). A non-integer tempo is refused because the engine takes an integer.
+- **Length (`tempo.plan_tempo`, pure).** bars = the whole number nearest `--duration` / bar (a half bar rounds up), then kept inside the engine's range (ACE-Step 10-600 s) by adding or removing bars. The bed is bars x bar seconds long, so it ends on a bar line; "120 BPM, 15 s" is 7.5 bars and becomes 8 bars, 16 s. The result warns when the length moved, and the provenance's `parameters.tempo` records the request and the plan. The usual duration check (`probe`, max(0.1 s, 1 %)) then applies to the bar-aligned length.
+- **The grid as data (`tempo.beat_grid`).** `<output stem>.beats.json` (schema `sound-design/beat-grid@1`, ASCII JSON), also returned as `tempo_map`: bpm, time signature, beat and bar length, every beat (time, bar, count), the downbeats, the bar lines, the audio file name and SHA-256. It is written in the run directory and renamed into place after the WAV; an existing grid file is refused like an existing WAV, unless `--overwrite`. The handoff names it.
+- **Honest about what it is.** The grid is the requested one with the first beat assumed at 0 s: `source: "requested"`, `measured: false`, and every tempo result warns that the engine's adherence is not measured.
+- Without `--bpm` nothing changes: no `bpm` / `timesignature` is passed, no grid is written, `tempo_map` is null.
+
+**Why the Done-when cannot be shown here (step 8 stays open).**
+- No ACE-Step and no weights are installed, so no real output exists to measure. The fake engine places a click on every requested beat; a unit test checks those clicks fall within 20 ms of the written grid, which checks the grid's maths, not ACE-Step.
+- ffmpeg-skill `scenes --beats` (3.1.8) refuses audio-only input ("input has no video stream"), and a bed is a WAV.
+- Wrapped in a video (ffmpeg-skill `waveform`) to get past that, a synthetic 120 BPM click track was not resolved to 20 ms: onsets at 0.25 + k x 0.5 s were reported at 0.21 + k x 0.5 s, and onsets at 0 + k x 0.5 s at 0.06 + k x 0.5 s. Its phase search keeps the first of the tied phases within its alignment tolerance. So even a perfect grid would not be confirmed within 20 ms today.
+Both are ffmpeg-skill's (treated as complete; not changed here). The proposal goes to Velisa's ROADMAP: `scenes --beats` on audio-only input, and a phase resolved to the onsets themselves.
+
+**Tests.** `tests/test_tempo.py`: bar rounding (including 3/4, 6/8 and the range edges), the checks, the grid document, `--bpm` reaching the engine's `GenerationParams`, the grid beside the WAV and equal to `tempo_map`, refusal of an existing grid, nothing changed without `--bpm`, the CLI and the contract. Integration: "120 BPM, 15 s" through the real worker and the real `probe` gives 16.0 s and its 32-beat grid.

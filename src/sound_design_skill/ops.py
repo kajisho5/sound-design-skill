@@ -19,6 +19,9 @@ validated through ffmpeg-skill, then one rename):
                 max(0.1 s, 1 %) of the request (else INVALID_RESULT)
   8. place      the WAV is renamed into place (it replaces nothing unless --overwrite); the run directory is removed
 Nothing is written to the output path unless every step passes.
+With --bpm (step 8, ADR-012; tempo.py) the duration becomes the nearest whole number of bars at that tempo and time
+signature, both are passed to the engine, and the beat grid is written beside the WAV as <name>.beats.json (placed
+after the WAV, refused like the WAV when it exists).
 
 GENERATE_SFX runs the same eight steps with these differences: no lyrics; the prompt is < 512 characters (EzAudio's
 T5 encoder reads at most 100 tokens and the result warns when the prompt is certainly longer); the duration is a
@@ -45,6 +48,7 @@ from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
 from .provenance import build_provenance, sha256_text
 from .service import DEFAULT_TIMEOUT, run_engine
+from . import tempo as T
 
 BGM_SCHEMA = f"{SKILL_ID}/generate-bgm@1"
 SFX_SCHEMA = f"{SKILL_ID}/generate-sfx@1"
@@ -70,6 +74,8 @@ class BgmRequest:
     overwrite: bool = False
     ffmpeg_skill_dir: Optional[str] = None
     offline: bool = False
+    bpm: Optional[int] = None              # step 8 (ADR-012): the tempo, the length rounded to whole bars, a beat grid
+    time_signature: Optional[int] = None   # 2, 3, 4 (default with --bpm) or 6 (6/8)
 
 
 @dataclass
@@ -263,9 +269,21 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
     """GENERATE_BGM: one music bed as a WAV at `req.output_path`, with its provenance. `skill` is the ffmpeg-skill
     handle (located from `req.ffmpeg_skill_dir` when None)."""
     caption, lyrics = _check_args(req)
+    bpm, beats_per_bar = T.check_tempo(req.bpm, req.time_signature)
     dst = check_output(req.output_path, req.overwrite, (req.lyrics_path,))
+    grid_dst = T.grid_path(dst) if bpm is not None else None
+    if grid_dst is not None and os.path.lexists(grid_dst) and not req.overwrite:
+        raise SoundDesignError("OUTPUT_EXISTS", f"{grid_dst} (the beat grid) exists; pass --overwrite to replace it",
+                               {"output": grid_dst})
     engine, report = select_engine("bgm", req.engine, req.offline)
     duration = req.duration
+    plan = None
+    if bpm is not None:
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not duration > 0:
+            raise SoundDesignError("INVALID_ARGUMENT", "--duration must be a number of seconds", {"duration": duration})
+        lo, hi = engine.spec.duration_range
+        plan = T.plan_tempo(float(duration), bpm, beats_per_bar, lo, hi)
+        duration = plan["duration"]
     probe_req = EngineRequest(op="bgm", prompt=caption, duration=duration, output_path=dst, seed=req.seed, lyrics=lyrics)
     engine.validate(probe_req)                       # the engine's duration window, before any process starts
     duration = float(duration)
@@ -275,8 +293,11 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
     run_dir = _run_dir(os.path.dirname(dst), req.output_path)
     try:
         wav = os.path.join(run_dir, OUTPUT_NAME)
+        params: Dict[str, Any] = {"device": req.device}
+        if plan is not None:
+            params.update(bpm=plan["bpm"], timesignature=str(plan["beats_per_bar"]))
         result, facts = _run_validated(engine, EngineRequest(op="bgm", prompt=caption, duration=duration, output_path=wav,
-                                                             seed=seed, lyrics=lyrics, params={"device": req.device}),
+                                                             seed=seed, lyrics=lyrics, params=params),
                                        float(req.timeout), run_dir, skill)
         measured = float(facts.get("duration") or 0.0)
         engine_doc = dict(report, version=result.engine_version, model=result.model)
@@ -287,11 +308,21 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
                       "sample_rate": result.sample_rate, "engine_api": result.extra.get("api"),
                       "generation_params": result.extra.get("generation_params"),
                       "generation_config": result.extra.get("generation_config"), "timeout": float(req.timeout)}
+        if plan is not None:
+            parameters["tempo"] = {k: plan[k] for k in ("bpm", "time_signature", "bars", "beats", "duration",
+                                                        "requested_duration", "adjusted")}
         provenance = build_provenance(op="bgm", engine=engine_doc, prompt=caption, seed=seed,
                                       duration={"requested": duration, "measured": measured,
                                                 "tolerance": tolerance_for(duration)},
                                       output_path=wav, parameters=parameters, ffmpeg_skill=info.to_dict())
+        grid = None
+        if plan is not None:
+            grid = T.beat_grid(plan, {"file": os.path.basename(dst), "sha256": provenance["output"]["sha256"],
+                                      "measured_duration": measured})
+            grid_tmp = T.write_grid(os.path.join(run_dir, "beats.json"), grid)
         _place(wav, dst, req.overwrite)
+        if plan is not None:
+            os.replace(grid_tmp, grid_dst)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
     a = facts.get("audio") or {}
@@ -303,16 +334,29 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
         "skill": {"id": SKILL_ID, "version": __version__},
         "output": {"path": dst, "format": "wav", "codec": a.get("codec"), "sample_rate": a.get("sample_rate"),
                    "channels": a.get("channels"), "duration": measured, "sha256": provenance["output"]["sha256"]},
-        "request": {"prompt": caption, "duration": duration, "seed": seed, "seed_source": seed_source},
+        "request": {"prompt": caption, "duration": duration, "seed": seed, "seed_source": seed_source,
+                    **({} if plan is None else {"requested_duration": plan["requested_duration"], "bpm": plan["bpm"],
+                                                "time_signature": plan["time_signature"]})},
+        "tempo_map": None if grid is None else dict(grid, path=grid_dst),
         "engine": {k: engine_doc.get(k) for k in ("id", "version", "model", "code_license", "weights_license", "output_use",
                                                    "lm_status")},
         "steps": [{"tool": f"{SKILL_ID}/worker", "engine": engine.id}, {"tool": "ffmpeg-skill/probe", "result":
                   {"duration": measured, "sample_rate": a.get("sample_rate"), "channels": a.get("channels")}}],
         "provenance": provenance,
-        "handoff": {"to": "audio-production-skill MIX", "path": dst, "note": "placed under the programme there; nothing is "
-                                                                              "mixed here"},
-        "warnings": [],
+        "handoff": {"to": "audio-production-skill MIX", "path": dst, "beat_grid": grid_dst,
+                    "note": "placed under the programme there; nothing is mixed here"},
+        "warnings": [] if plan is None else _tempo_warnings(plan),
     }
+
+
+def _tempo_warnings(plan: Dict[str, Any]) -> List[str]:
+    out = []
+    if plan["adjusted"]:
+        out.append(f"the bed is {plan['duration']:g}s ({plan['bars']} bars of {plan['time_signature']} at {plan['bpm']} BPM), "
+                   f"not {plan['requested_duration']:g}s, so that it ends on a bar line")
+    out.append("the beat grid is the requested one (first beat at 0 s); the engine's adherence to the tempo is not "
+               "measured (ADR-012)")
+    return out
 
 
 def generate_sfx(req: SfxRequest, skill: Optional[FfmpegSkill] = None) -> Dict[str, Any]:

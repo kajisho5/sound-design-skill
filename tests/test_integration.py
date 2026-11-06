@@ -95,6 +95,17 @@ class GenerateBgmIntegrationTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.dir)), sorted(["a.wav", "b.wav", "c.wav", "ckpt", "site",
                                                                "fake_acestep_calls.jsonl"]))
 
+    def test_a_tempo_bed_ends_on_a_bar_line_with_its_grid_beside_it(self):
+        out = os.path.join(self.dir, "pv.wav")
+        rc, doc = run_cli("generate-bgm", "--prompt", "upbeat pop", "--duration", "15", "--bpm", "120", "-o", out,
+                          "--seed", "9", "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")      # "120 BPM, 15 s"
+        self.assertEqual(rc, 0, doc)
+        self.assertAlmostEqual(float(FfmpegSkill.locate(str(FFMPEG_SKILL_DIR)).probe(out)["duration"]), 16.0, delta=0.01)
+        with open(os.path.join(self.dir, "pv.beats.json"), encoding="utf-8") as fh:
+            grid = json.load(fh)
+        self.assertEqual((grid["bpm"], grid["bars"], len(grid["beats"]), grid["bar_lines"][-1]), (120, 8, 32, 16.0))
+        self.assertEqual((grid["measured"], grid["audio"]["sha256"]), (False, doc["output"]["sha256"]))
+
     def test_a_bed_of_the_wrong_length_is_refused_by_the_real_probe(self):
         self.fake["set_mode"]("short")
         out, (rc, doc) = self.cli("short.wav", "--seed", "1")

@@ -2,6 +2,11 @@
 
 ## 0.1.0 - unreleased
 
+Tempo-targeted GENERATE_BGM (roadmap step 8, ADR-012).
+
+- `generate-bgm --bpm <30-300> [--time-signature 2|3|4|6]`: the tempo and time signature go to ACE-Step as `GenerationParams.bpm` / `timesignature` (read at ca1e85fe), the length becomes the nearest whole number of bars inside the engine's range (120 BPM and 15 s become 16 s), and the beat grid is written beside the WAV as `<name>.beats.json` (schema `sound-design/beat-grid@1`) and returned as `tempo_map`. The grid is the requested one (`measured: false`); the engine's adherence is not measured.
+- Not done: ffmpeg-skill `scenes --beats` refuses audio-only input and, on a video wrapper, resolves a synthetic click track's phase 40-60 ms off, so the roadmap's 20 ms agreement cannot be shown; no real ACE-Step output exists here.
+
 Loopable beds, timed stingers and a seam check (roadmap step 7, ADR-011). No engine; edits through ffmpeg-skill only.
 
 - `sound-design loop-bed <in.wav> -o loop.wav --duration <s> [--search 1] [--crossfade 0.25] --json` (schema `sound-design/loop-bed@1`): the loop point is searched within `--search` s of `--duration`; the source's continuation is crossfaded into its start (ffmpeg-skill `cut`, `join`, `cut`), so the wrap is the source's own continuity; the wrap is measured and a failing one refused (`INVALID_RESULT`).

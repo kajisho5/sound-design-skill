@@ -174,7 +174,8 @@ class AceStepEngine(Engine):
                                    {"engine": self.id, "install": self.spec.install, "attempts": attempts})
         if not ok:
             raise SoundDesignError("ENGINE_FAILED", "ACE-Step initialize_service failed: " + _tail(status), {"engine": self.id})
-        gen = generation_kwargs(caption, req.lyrics, float(req.duration), seed)
+        gen = generation_kwargs(caption, req.lyrics, float(req.duration), seed, bpm=req.params.get("bpm"),
+                                timesignature=req.params.get("timesignature"))
         params = inference.GenerationParams(**gen)
         config = inference.GenerationConfig(batch_size=1, use_random_seed=False, seeds=[seed], audio_format="wav")
         result = inference.generate_music(dit, None, params, config, save_dir=out_dir)
@@ -213,11 +214,18 @@ def missing_components(ckpt: Path) -> List[str]:
     return [c for c in MAIN_MODEL_COMPONENTS if not has_weights(ckpt / c)]
 
 
-def generation_kwargs(caption: str, lyrics: Optional[str], duration: float, seed: int) -> Dict[str, Any]:
-    """GenerationParams for a text2music bed, DiT only: no LM chain-of-thought (thinking and every use_cot_* off)."""
-    return {"task_type": "text2music", "caption": caption, "lyrics": INSTRUMENTAL_LYRICS if lyrics is None else lyrics,
-            "instrumental": lyrics is None, "duration": duration, "seed": seed, "thinking": False, "use_cot_metas": False,
-            "use_cot_caption": False, "use_cot_language": False}
+def generation_kwargs(caption: str, lyrics: Optional[str], duration: float, seed: int, bpm: Optional[int] = None,
+                      timesignature: Optional[str] = None) -> Dict[str, Any]:
+    """GenerationParams for a text2music bed, DiT only: no LM chain-of-thought (thinking and every use_cot_* off). A
+    requested tempo goes in `bpm` (int, 30-300) and `timesignature` ("2" / "3" / "4" / "6"), which generate_music hands
+    to the DiT with the LM off (acestep/inference.py at ca1e85fe; ADR-012); without one both stay unset."""
+    gen = {"task_type": "text2music", "caption": caption, "lyrics": INSTRUMENTAL_LYRICS if lyrics is None else lyrics,
+           "instrumental": lyrics is None, "duration": duration, "seed": seed, "thinking": False, "use_cot_metas": False,
+           "use_cot_caption": False, "use_cot_language": False}
+    if bpm is not None:
+        gen["bpm"] = int(bpm)
+        gen["timesignature"] = str(timesignature or "4")
+    return gen
 
 
 def refuse_downloads(downloader: Any) -> List[str]:
