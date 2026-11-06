@@ -107,6 +107,14 @@ def build_parser() -> argparse.ArgumentParser:
     li.add_argument("--source", help="where it came from (URL or text)")
     li.add_argument("--author", help="author / composer")
     li.add_argument("--credit", help="the credit line the licence asks for")
+    li.add_argument("--title", help="the track's title (used in a composed CC BY attribution line)")
+    li.add_argument("--provider", help="where you downloaded it (e.g. Freesound, YouTube Audio Library)")
+    li.add_argument("--licence-url", "--license-url", dest="licence_url", help="the licence's web address (recorded, never opened)")
+    li.add_argument("--licence-file", "--license-file", dest="licence_file",
+                    help="the licence text that came with the download (copied into <library>/licences/)")
+    li.add_argument("--attribution", help="the attribution line exactly as the source asks for it")
+    li.add_argument("--content-id", choices=("registered", "not-registered"),
+                    help="only when the source says so: the track is (not) registered for Content ID")
     li.add_argument("--name", help="path inside the library (default: the file name)")
     li.add_argument("--no-loudness", dest="loudness", action="store_false", help="skip the loudness measurement")
     li.add_argument("--overwrite", action="store_true", help="replace a file or manifest entry already in the library")
@@ -231,6 +239,8 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  engine {eid:17} {e['status']:12} {e.get('detail') or ''}")
             if e.get("install"):
                 print(f"    install: {e['install']}")
+        for sid, st in (doc["checks"].get("stock_sources") or {}).items():
+            print(f"  stock {sid:18} {st['status']:12} {st['needs'] or 'download by hand'}")
         for op, o in doc["checks"]["operations"].items():
             print(f"  op {op:14} implemented={o['implemented']} engine={o['engine']} ready={o['ready']}")
             if o.get("confirmation_required"):
@@ -270,6 +280,8 @@ def _human(doc: Dict[str, Any]) -> None:
         out = doc["output"]
         print(f"{out['path']}: {out['duration']:.2f}s from {doc['source']['file']} ({doc['fit']['mode']}); licence "
               f"{doc['licence']['licence']} (declared, not verified)")
+        if doc["licence"].get("attribution"):
+            print(f"  credit: {doc['licence']['attribution']}")
         for w in doc.get("warnings") or []:
             print(f"  warning: {w}")
     elif doc.get("schema", "").endswith("/loop-bed@1"):
@@ -348,6 +360,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                       kind=args.kind, tags=args.tags, mood=args.mood, loopable=args.loopable,
                                                       source=args.source, author=args.author, credit=args.credit,
                                                       name=args.name, loudness=args.loudness, overwrite=args.overwrite,
+                                                      title=args.title, provider=args.provider, licence_url=args.licence_url,
+                                                      licence_file=args.licence_file, attribution=args.attribution,
+                                                      content_id=args.content_id,
                                                       ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout)), as_json)
             return 0
         if args.cmd == "library-index":
