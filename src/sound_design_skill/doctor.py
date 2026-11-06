@@ -20,6 +20,7 @@ from .engines import DEFAULT_ENGINE, confirmation_for, engine_ids, engines_for, 
 from .engines.base import OK
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
+from . import stock
 
 DOCTOR_SCHEMA = f"{SKILL_ID}/doctor@1"
 # op -> implemented? / roadmap step; GENERATE_BGM since step 2 (ADR-004), GENERATE_SFX since step 3 (ADR-006), library
@@ -93,6 +94,7 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
         if op in NO_ENGINE_NOTE:
             ops[op]["note"] = NO_ENGINE_NOTE[op]
     checks["operations"] = ops
+    checks["stock_sources"] = stock.report()       # step 10 (ADR-014): reported only; never called, never a problem
     missing_engines = sorted(eid for eid, e in engines.items() if e["status"] != OK)
     status = "fail" if problems else ("degraded" if missing_engines else "ok")
     return {

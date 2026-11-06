@@ -354,5 +354,42 @@ class CueSheetIntegrationTests(unittest.TestCase):
                 self.assertEqual(json.load(fh)["cues"], doc["cues"])
 
 
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class StockLicenceIntegrationTests(unittest.TestCase):
+    """Stock tracks the user downloaded, with their licence records, through the CLI and the real ffmpeg-skill
+    (ADR-014)."""
+
+    def test_cc_by_attribution_in_the_receipt_and_a_content_id_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib, dl = os.path.join(tmp, "library"), os.path.join(tmp, "ダウンロード")
+            os.mkdir(lib)
+            os.mkdir(dl)
+            cli = lambda *a: run_cli(*a, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")   # noqa: E731
+            track = write_tone_wav(os.path.join(dl, "morning.wav"), seconds=8.0, rate=48000)
+            text = os.path.join(dl, "LICENSE.txt")
+            with open(text, "w", encoding="utf-8") as fh:
+                fh.write("Creative Commons Attribution 4.0 International Public License\n")
+            rc, doc = cli("library-import", track, "--library", lib, "--licence", "CC-BY-4.0", "--kind", "bgm",
+                          "--tags", "morning", "--title", "Morning Light", "--author", "Aiko Tanaka",
+                          "--licence-url", "https://creativecommons.org/licenses/by/4.0/", "--licence-file", text)
+            self.assertEqual(rc, 0, doc)
+            rc, pick = cli("library-pick", lib, "-o", os.path.join(tmp, "bed.wav"), "--kind", "bgm", "--tags", "morning",
+                           "--duration", "5")
+            self.assertEqual(rc, 0, pick)
+            line = '"Morning Light" by Aiko Tanaka, licensed under CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/)'
+            self.assertEqual((pick["licence"]["attribution"], pick["provenance"]["licence"]["attribution"]), (line, line))
+            hit = write_tone_wav(os.path.join(dl, "hit.wav"), seconds=8.0, rate=48000, freq=330.0)
+            rc, doc = cli("library-import", hit, "--library", lib, "--licence", "Royalty-free (store licence)", "--kind", "bgm",
+                          "--tags", "hit", "--provider", "ShopX", "--content-id", "registered")
+            self.assertEqual(rc, 0, doc)
+            rc, pick = cli("library-pick", lib, "-o", os.path.join(tmp, "hit-bed.wav"), "--kind", "bgm", "--tags", "hit")
+            self.assertEqual(rc, 0, pick)
+            self.assertEqual(pick["licence"]["content_id"], "registered")
+            self.assertTrue(any("Content ID" in w for w in pick["warnings"]), pick["warnings"])
+            rc, refused = cli("library-import", track, "--library", lib, "--kind", "bgm", "--name", "again.wav",
+                              "--licence-url", "https://example.invalid/licence")
+            self.assertEqual((rc, refused["error"]["code"]), (2, "LICENCE_REQUIRED"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ from . import SKILL_ID, __version__
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
 from .ops import check_output, tolerance_for, usable_skill
-from .provenance import build_library_provenance, sha256_file
+from .provenance import build_library_provenance, sha256_file, sha256_text
 
 MANIFEST_NAME = "sound-library.json"
 MANIFEST_SCHEMA = f"{SKILL_ID}/library@1"
@@ -61,6 +61,9 @@ DEFAULT_CROSSFADE = 0.5      # seconds between loop repeats, capped at a quarter
 MAX_REPEATS = 64
 DEFAULT_TIMEOUT = 600.0
 FIT_RANK = {"none": 0, "trim": 1, "loop": 2}
+CONTENT_ID_VALUES = ("registered", "not-registered")     # as the source states it; anything else is "unknown"
+LICENCE_DIR = "licences"                                 # licence texts copied into the library (not audio, not scanned)
+MAX_LICENCE_TEXT = 1 << 20
 LICENCE_NOTE = ("declared by the user in sound-library.json; this skill records it and does not verify or clear it "
                 "(licence clearance is not provided)")
 SELECTION_RULE = ("eligible: declared licence, requested kind, >= 1 requested tag / mood matched, audio only, fittable; "
@@ -112,12 +115,38 @@ def licence_info(entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         v = entry.get(key) if isinstance(entry, dict) else None
         return v.strip() if isinstance(v, str) and v.strip() else None
 
-    return {"licence": text if declared else "unknown", "status": "declared" if declared else "unknown",
-            "declared_as": raw if isinstance(raw, str) else None, "verified": False, "usable": declared,
-            "declared_in": MANIFEST_NAME if isinstance(entry, dict) else None,
-            "source": opt("source"), "author": opt("author"), "credit": opt("credit"),
-            "note": LICENCE_NOTE if declared else "no licence declared for this file: it is reported as unknown and "
-                                                  "is not used until its licence is declared (library-import --licence)"}
+    content_id = opt("content_id")
+    info: Dict[str, Any] = {
+        "licence": text if declared else "unknown", "status": "declared" if declared else "unknown",
+        "declared_as": raw if isinstance(raw, str) else None, "verified": False, "usable": declared,
+        "declared_in": MANIFEST_NAME if isinstance(entry, dict) else None,
+        "source": opt("source"), "author": opt("author"), "credit": opt("credit"),
+        "title": opt("title"), "provider": opt("provider"), "licence_url": opt("licence_url"),
+        "licence_file": opt("licence_file"), "licence_text_sha256": opt("licence_text_sha256"),
+        "content_id": content_id if content_id in CONTENT_ID_VALUES else "unknown",
+        "note": LICENCE_NOTE if declared else "no licence declared for this file: it is reported as unknown and is not "
+                                              "used until its licence is declared (library-import --licence)"}
+    info.update(attribution_line(info, opt("attribution")) if declared else {"attribution": None, "attribution_source": None})
+    return info
+
+
+def attribution_line(info: Dict[str, Any], declared: Optional[str] = None) -> Dict[str, Any]:
+    """The credit line to show with the video (roadmap step 10, ADR-014): the one declared (--attribution), else the
+    declared --credit, else, for a Creative Commons attribution licence, one composed from what was declared in the
+    TASL order (title, author, source, licence): '"Title" by Author (source), licensed under CC-BY-4.0 (licence URL)'.
+    Never invented: a part that was not declared is left out, and with neither title nor author nothing is composed."""
+    if declared:
+        return {"attribution": declared, "attribution_source": "declared"}
+    if info.get("credit"):
+        return {"attribution": info["credit"], "attribution_source": "credit"}
+    if not _BY.search(info["licence"]) or not (info.get("title") or info.get("author")):
+        return {"attribution": None, "attribution_source": None}
+    who = f'"{info["title"]}"' if info.get("title") else ""
+    if info.get("author"):
+        who = f"{who} by {info['author']}" if who else info["author"]
+    line = who + (f" ({info['source']})" if info.get("source") else "") + f", licensed under {info['licence']}"
+    line += f" ({info['licence_url']})" if info.get("licence_url") else ""
+    return {"attribution": line, "attribution_source": "composed"}
 
 
 def licence_warnings(key: str, info: Dict[str, Any], fitted: bool = False) -> List[str]:
@@ -131,9 +160,17 @@ def licence_warnings(key: str, info: Dict[str, Any], fitted: bool = False) -> Li
     if fitted and _ND.search(text):
         out.append(f"{key}: the declared licence {text!r} names a no-derivatives term; trimming or looping may be an "
                    "adaptation it does not allow")
-    if _BY.search(text) and not info.get("credit"):
+    if _BY.search(text) and not info.get("attribution"):
         out.append(f"{key}: the declared licence {text!r} is a Creative Commons attribution licence and no credit is "
                    "declared; add one (library-import --credit) and show it in the video's credits")
+    elif info.get("attribution_source") == "composed":
+        out.append(f"{key}: attribution line composed from the declared title / author / source / licence: "
+                   f"{info['attribution']!r}; check it against the source's own wording and show it in the video's credits")
+    if info.get("content_id") == "registered":
+        by = f" by {info['provider']}" if info.get("provider") else ""
+        out.append(f"{key}: declared as registered for Content ID{by}: a video that uses it may receive a Content ID claim "
+                   "on upload; before publishing, have the channel allow-listed with the rights holder or keep the "
+                   "licence ready to dispute the claim")
     return out
 
 
@@ -350,6 +387,12 @@ class LibraryImportRequest:
     credit: Optional[str] = None
     name: Optional[str] = None
     loudness: bool = True
+    title: Optional[str] = None             # step 10 (ADR-014): stock music / SFX the user downloaded
+    provider: Optional[str] = None
+    licence_url: Optional[str] = None
+    licence_file: Optional[str] = None
+    attribution: Optional[str] = None
+    content_id: Optional[str] = None        # "registered" / "not-registered", only as the source states it
     overwrite: bool = False
     ffmpeg_skill_dir: Optional[str] = None
     timeout: float = DEFAULT_TIMEOUT
@@ -378,7 +421,15 @@ def library_import(req: LibraryImportRequest, skill: Optional[FfmpegSkill] = Non
     info = require_licence(req.licence, name)
     kind = _check_kind(req.kind, required=True)
     tags, moods = word_list(req.tags, "tags"), word_list(req.mood, "mood")
-    texts = {k: _opt_text(getattr(req, k), k) for k in ("source", "author", "credit")}
+    texts = {k: _opt_text(getattr(req, k), k) for k in ("source", "author", "credit", "title", "provider", "licence_url",
+                                                         "attribution")}
+    if texts["licence_url"] is not None and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://\S+$", texts["licence_url"]):
+        raise SoundDesignError("INVALID_ARGUMENT", "--licence-url must be a web address (scheme://...); it is recorded, "
+                               "never opened", {"licence_url": req.licence_url})
+    if req.content_id is not None and req.content_id not in CONTENT_ID_VALUES:
+        raise SoundDesignError("INVALID_ARGUMENT", f"--content-id must be one of {', '.join(CONTENT_ID_VALUES)} (as the "
+                               "source states it; leave it out when the source says nothing)", {"content_id": req.content_id})
+    licence_text = _read_licence_text(req.licence_file)
     timeout = _check_timeout(req.timeout)
     if not isinstance(req.input_path, str) or not os.path.isfile(req.input_path):
         raise SoundDesignError("INPUT_NOT_FOUND", f"{req.input_path} is not a file", {"input": req.input_path})
@@ -430,6 +481,11 @@ def library_import(req: LibraryImportRequest, skill: Optional[FfmpegSkill] = Non
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+    if licence_text is not None:
+        texts["licence_text_sha256"] = licence_text[1]
+        texts["licence_file"] = _store_licence_text(library, licence_text)
+    if req.content_id is not None:
+        texts["content_id"] = req.content_id
     entry: Dict[str, Any] = {"licence": info["licence"], "kind": kind, "tags": tags, "mood": moods,
                              "loopable": req.loopable is True, **{k: v for k, v in texts.items() if v is not None},
                              "sha256": sha, "measured": dict(facts, loudness=loud),
@@ -453,6 +509,44 @@ def library_import(req: LibraryImportRequest, skill: Optional[FfmpegSkill] = Non
         "ffmpeg_skill": _skill_doc(sinfo),
         "warnings": licence_warnings(key, licence),
     }
+
+
+def _read_licence_text(path: Optional[str]) -> Optional[Tuple[str, str, str]]:
+    """(text, SHA-256 of its UTF-8 bytes, original name) of a licence text file the user downloaded with a track. Line
+    endings are normalised to LF (a CRLF download and an LF one of the same licence get the same SHA-256 on every OS)."""
+    if path is None:
+        return None
+    if not isinstance(path, str) or not os.path.isfile(path):
+        raise SoundDesignError("INPUT_NOT_FOUND", f"--licence-file {path} is not a file", {"licence_file": path})
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(MAX_LICENCE_TEXT + 1)
+        text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, UnicodeDecodeError) as e:
+        raise SoundDesignError("INVALID_ARGUMENT", f"--licence-file must be UTF-8 text: {e}", {"licence_file": path})
+    if len(data) > MAX_LICENCE_TEXT or not text.strip():
+        raise SoundDesignError("INVALID_ARGUMENT", "--licence-file must be non-empty text of at most 1 MiB",
+                               {"licence_file": path})
+    return text, sha256_text(text), os.path.basename(path)
+
+
+def _store_licence_text(library: str, licence: Tuple[str, str, str]) -> str:
+    """The licence text (LF line endings, UTF-8) copied into <library>/licences/<sha256>.txt, one copy per distinct
+    text, written as bytes so no OS translates its line endings; returns its library-relative path."""
+    text, sha, _ = licence
+    rel = f"{LICENCE_DIR}/{sha}.txt"
+    dst = os.path.join(library, LICENCE_DIR, f"{sha}.txt")
+    if not os.path.isfile(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".sound-design-", suffix=".txt", dir=os.path.dirname(dst))
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(text.encode("utf-8"))
+            os.replace(tmp, dst)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    return rel
 
 
 # ------------------------------------------------------------------------------------------------- library-index
@@ -699,7 +793,8 @@ def library_pick(req: LibraryPickRequest, skill: Optional[FfmpegSkill] = None) -
         "engine": None,
         "steps": steps,
         "provenance": provenance,
-        "handoff": {"to": "audio-production-skill MIX", "path": dst, "note": "placed in the programme there with the "
-                                                                              "licence and credit; nothing is mixed here"},
+        "handoff": {"to": "audio-production-skill MIX", "path": dst, "credit_line": chosen["licence"]["attribution"],
+                    "content_id": chosen["licence"]["content_id"],
+                    "note": "placed in the programme there with the licence and credit; nothing is mixed here"},
         "warnings": warnings,
     }

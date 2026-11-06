@@ -16,6 +16,7 @@ from .provenance import ENGINE_FIELDS
 from . import pcm
 from . import tempo
 from . import cues
+from . import stock
 from . import shaping
 
 CONTRACT_VERSION = "1.0"
@@ -56,7 +57,9 @@ _OP_TOOLS = {
                            "kind bgm|sfx", "tags / mood", "loopable", "source / author / credit"],
                 "argv": ["library-import", "<file>", "--library <dir>", "--licence <SPDX|text>", "--kind bgm|sfx",
                          "[--tags <a,b,...>]", "[--mood <a,b,...>]", "[--loopable]", "[--source <url|text>]",
-                         "[--author <text>]", "[--credit <text>]", "[--name <relative path>]", "[--no-loudness]",
+                         "[--author <text>]", "[--credit <text>]", "[--title <text>]", "[--provider <name>]",
+                         "[--licence-url <url>]", "[--licence-file <text file>]", "[--attribution <line>]",
+                         "[--content-id registered|not-registered]", "[--name <relative path>]", "[--no-loudness]",
                          "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--timeout 600]", "--json"],
                 "schema": "sound-design/library-import@1",
                 "manifest": "sound-library.json at the library root (schema sound-design/library@1), UTF-8, keyed by "
@@ -217,6 +220,8 @@ def contract() -> Dict[str, Any]:
                     "selection_adr": "docs/decisions.md ADR-001 (BGM), ADR-005 (SFX)",
                     "optional": True,
                     "statuses": ["OK", "MISSING", "INCOMPATIBLE"]},
+        "stock": {"reported_by": "doctor checks.stock_sources", "sources": [x["id"] for x in stock.SOURCES],
+                  "statuses": ["MISSING (API key not set)", "KEY_SET", "MANUAL (no API)"], "fetch": stock.FETCH_NOTE},
         "device": {"reported_by": "doctor checks.device", "detected_by": ["nvidia-smi --query-gpu", "platform + sysctl hw.memsize (Apple Silicon)",
                                                                           "rocm-smi on PATH (noticed, not measured)"],
                    "statuses": ["OK", "CPU_ONLY", "UNKNOWN"], "acestep_tiers": [t for _, t in ACESTEP_TIERS]},
@@ -231,6 +236,12 @@ def contract() -> Dict[str, Any]:
                                       "LICENCE_REQUIRED; library-index reports such files as licence \"unknown\"; "
                                       "library-pick never chooses them. A declared licence is recorded exactly as "
                                       "declared with verified: false; nothing is inferred or cleared (ADR-008)",
+                   "stock_licences": "a stock track the user downloaded is imported with its licence (SPDX id or name), "
+                                     "the licence URL and / or text (copied into the library's licences/ folder, "
+                                     "SHA-256 recorded), title, provider, author, and the source's Content ID statement "
+                                     "(registered / not-registered, else unknown); the receipt carries the attribution "
+                                     "line (declared, the credit, or composed in TASL order for a CC BY licence from "
+                                     "declared parts only) and warns about a Content ID registered track (ADR-014)",
                    "library_engine": "library mode runs no engine (never ACE-Step or EzAudio, no worker) and downloads "
                                      "nothing; every media step is an ffmpeg-skill tool (ADR-008)",
                    "shaping": "loop-bed and stinger run no engine; they edit a WAV the caller already has through "
@@ -248,7 +259,9 @@ def contract() -> Dict[str, Any]:
                                   "confirmation.flag", "network"],
                        "library_fields": ["skill", "op", "engine (null)", "ai_generated (false)", "source.file",
                                           "source.sha256", "source.measured", "licence.licence", "licence.status",
-                                          "licence.verified", "licence.credit", "selection.rule", "selection.query",
+                                          "licence.verified", "licence.credit", "licence.attribution",
+                                          "licence.attribution_source", "licence.content_id", "licence.licence_url",
+                                          "licence.licence_text_sha256", "selection.rule", "selection.query",
                                           "fit.mode", "duration.requested", "duration.measured", "output.sha256",
                                           "ffmpeg_skill.version", "network"],
                        "shaping_fields": ["skill", "op", "engine (null)", "ai_generated (as the source)",

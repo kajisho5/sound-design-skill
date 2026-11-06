@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-0.1.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5). `scaffold` in ecosystem.json.
+0.1.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, skill side), tempo-targeted BGM with a beat grid (step 8, skill side), SFX cue sheets (step 9), stock licence records (step 10). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
@@ -45,9 +45,10 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
   - なぜ要るか：YouTube 風の効果音を、カットや強調テロップの時刻に揃えて置ける
   - Done when: a fixture with 10 cut times yields a cue sheet whose effects sit at those times and respect the spacing
   - Done (ADR-013): [#16](https://github.com/kajisho5/sound-design-skill/pull/16); `sound-design sfx-cues` writes one cue per caller time (none added, none moved; one closer than `--min-spacing` to the last kept cue is dropped with the reason), effects from the library (declared licence) or named WAVs, the effect's peak or onset on the time, `gain_db` to `--level`; the 10-cut fixture gives 10 cues at those times with every gap at least the spacing, unit and against the real ffmpeg-skill
-- [ ] **10. Stock music and SFX with licence records** — library mode reads royalty-free sources the user has downloaded (with their licence text or URL), records the licence, the attribution line and whether the track is registered for Content ID when the source says so, and refuses a file without a licence as today
+- [x] **10. Stock music and SFX with licence records** — library mode reads royalty-free sources the user has downloaded (with their licence text or URL), records the licence, the attribution line and whether the track is registered for Content ID when the source says so, and refuses a file without a licence as today
   - なぜ要るか：BGM の権利表記漏れと、Content ID の申し立てを事前に避けられる
   - Done when: a fixture track with a CC BY licence yields its attribution line in the receipt; a track marked Content ID registered is warned about
+  - Done (ADR-014): [#17](https://github.com/kajisho5/sound-design-skill/pull/17); `library-import` records `--licence-url`, `--licence-file` (copied into `licences/` with LF line endings, SHA-256 of that text), `--title`, `--provider`, `--attribution` and `--content-id` as the source states them, and still refuses a missing licence; the receipt (`library-pick` licence block and provenance, `handoff.credit_line`) carries the attribution line (declared, the credit, or composed in TASL order from declared parts for CC BY); a Content ID registered track is warned about on import, index and pick; doctor lists stock sources (`MISSING` without an API key, never fetched); local fixtures, unit and against the real ffmpeg-skill
 
 ---
 Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
