@@ -2,6 +2,13 @@
 
 ## 0.1.0 - unreleased
 
+Stock music and SFX with licence records (roadmap step 10, ADR-014).
+
+- `library-import` gains `--licence-url`, `--licence-file` (the downloaded licence text, copied into `<library>/licences/<sha256>.txt`), `--title`, `--provider`, `--attribution` and `--content-id registered|not-registered` (only as the source states it). `--licence` stays required (`LICENCE_REQUIRED` as before).
+- The licence block (import, index, pick, cue sheets, provenance) carries `attribution`: the declared line, else the credit, else for CC BY one composed from declared parts in TASL order (warned). `library-pick`'s handoff adds `credit_line` and `content_id`.
+- A track declared registered for Content ID is warned about on import, index and pick.
+- `doctor` reports `checks.stock_sources`: Freesound and Jamendo `MISSING` until their API key is set (`KEY_SET` after), YouTube Audio Library `MANUAL`. Nothing is ever fetched; doctor's status is unchanged.
+
 Sound-effect cue sheet (roadmap step 9, ADR-013).
 
 - `sound-design sfx-cues [--cuts <t,...>] [--emphasis <t,...>] [--events <json>] [--library <dir>] [--effect cut|emphasis=<name>] [--file <name>=<wav>] [--min-spacing 0.25] [--level -12] [-o cues.json] --json` (schema `sound-design/sfx-cues@1`): one cue per caller time (none added, none moved; one closer than the spacing to the last kept cue is dropped with the reason), effects from the library (declared licence) or named WAVs, the effect's peak or onset on the time, `gain_db` to the level. For audio-production-skill MIX to place; nothing is mixed.
