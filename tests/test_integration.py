@@ -323,5 +323,36 @@ class ShapingIntegrationTests(unittest.TestCase):
                 self.assertEqual(doc["provenance"]["engine"], None)
 
 
+@unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
+class CueSheetIntegrationTests(unittest.TestCase):
+    """SFX_CUES through the CLI and the real ffmpeg-skill (ADR-013): effects imported into a library, a cue sheet for
+    the fixture's 10 cut times."""
+
+    def test_ten_cut_times_give_ten_cues_at_those_times(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = os.path.join(tmp, "効果音")
+            os.mkdir(lib)
+            cli = lambda *a: run_cli(*a, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")   # noqa: E731
+            for name, kind, at, lic in (("whoosh", "whoosh", 0.4, "CC0-1.0"), ("pop", "hit", 0.02, "CC0-1.0")):
+                src = write_burst_wav(os.path.join(tmp, f"{name}.wav"), kind, 0.8, at=at)
+                rc, doc = cli("library-import", src, "--library", lib, "--licence", lic, "--kind", "sfx", "--tags", name)
+                self.assertEqual(rc, 0, doc)
+            cuts = [1.0, 2.5, 3.0, 4.75, 6.0, 7.2, 8.0, 9.5, 11.0, 12.25]
+            out = os.path.join(tmp, "cues.json")
+            rc, doc = cli("sfx-cues", "--cuts", ",".join(map(str, cuts)), "--emphasis", "3.1,9.0", "--library", lib,
+                          "--min-spacing", "0.4", "-o", out)
+            self.assertEqual(rc, 0, doc)
+            self.assertEqual([c["time"] for c in doc["cues"] if c["kind"] == "cut"], cuts)
+            self.assertEqual([d["time"] for d in doc["dropped"]], [3.1])
+            times = [c["time"] for c in doc["cues"]]
+            self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), 0.4)
+            for c in doc["cues"]:
+                self.assertAlmostEqual(c["start"] + c["anchor_in_file"], c["time"], places=6)
+            self.assertLessEqual(abs(doc["sources"]["whoosh"]["anchors"]["peak"] - 0.4), 0.05)
+            self.assertLessEqual(abs(doc["sources"]["pop"]["anchors"]["onset"] - 0.02), 0.002)
+            with open(out, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["cues"], doc["cues"])
+
+
 if __name__ == "__main__":
     unittest.main()

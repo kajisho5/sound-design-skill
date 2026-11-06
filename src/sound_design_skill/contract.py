@@ -15,6 +15,7 @@ from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .provenance import ENGINE_FIELDS
 from . import pcm
 from . import tempo
+from . import cues
 from . import shaping
 
 CONTRACT_VERSION = "1.0"
@@ -129,6 +130,25 @@ _SHAPING_TOOLS = [
 ]
 
 
+_CUE_TOOLS = [
+    {"tool_id": f"{SKILL_ID}/sfx-cues", "role": "planning", "writes_media": False, "mutates_input": False,
+     "deterministic": True, "implemented": True, "roadmap_step": 9, "engine": None, "engines": [],
+     "description": "SFX_CUES: a cue sheet of sound effects (pop, whoosh, ding, ...) at the cut points and emphasis times "
+                    "the caller gives, for audio-production-skill MIX to place: one cue per event at the caller's time "
+                    "(the effect's peak or onset on it), a gain to a stated level, events closer than a minimum spacing "
+                    "dropped, never moved; effects from the library (declared licence) or a named WAV; the skill never "
+                    "decides where an emphasis is and mixes nothing (ADR-013)",
+     "inputs": ["cut times and / or emphasis times (or an events JSON)", "library folder and / or NAME=WAV files",
+                "effect per event kind", "minimum spacing", "level"],
+     "argv": ["sfx-cues", "[--cuts <t,t,...>]", "[--emphasis <t,t,...>]", "[--events <events.json>]", "[--library <dir>]",
+              "[--effect cut|emphasis=<name>]", "[--file <name>=<wav>]", f"[--min-spacing {cues.DEFAULT_SPACING:g}]",
+              f"[--level {cues.DEFAULT_LEVEL:g}]", "[-o <cues.json>]", "[--overwrite]", "[--ffmpeg-skill <dir>]",
+              "[--timeout 600]", "--json"],
+     "schema": cues.CUES_SCHEMA, "default_effects": dict(cues.DEFAULT_EFFECTS),
+     "align": {"peak": sorted(cues.PEAK_EFFECTS), "onset": "every other effect (first sample at 10 % of the peak)"}},
+]
+
+
 def tools() -> list:
     out = []
     for op, spec in _OP_TOOLS.items():
@@ -139,6 +159,7 @@ def tools() -> list:
                     "confirmation_required": confirmation_for(op) is not None, "confirmation": confirmation_for(op), **spec})
     out += [dict(t) for t in _LIBRARY_TOOLS]
     out += [dict(t) for t in _SHAPING_TOOLS]
+    out += [dict(t) for t in _CUE_TOOLS]
     out += [
         {"tool_id": f"{SKILL_ID}/doctor", "role": "diagnostic", "writes_media": False, "mutates_input": False, "deterministic": False,
          "implemented": True, "description": "What is installed and missing (engine, weights, ffmpeg-skill), compute device and "
@@ -182,7 +203,9 @@ def contract() -> Dict[str, Any]:
                          "music recognition, licence clearance or copyright checks of generated music",
                          "downloading engines or model weights (one-time manual step; doctor says how)",
                          "network access at run time", "direct ffmpeg calls (every media step is an ffmpeg-skill tool)"],
-        "handoff": {"loop": "the editor or audio-production-skill MIX repeats the loop end to end (no crossfade)",
+        "handoff": {"cues": "audio-production-skill MIX places each cue's file at its start with its gain; the times are "
+                            "the caller's, the skill adds and moves none",
+                    "loop": "the editor or audio-production-skill MIX repeats the loop end to end (no crossfade)",
                     "stinger": "audio-production-skill MIX places the stinger starting peak_at seconds before the cut",
                     "bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme",
                     "sfx": "audio-production-skill MIX places the generated effect (with its provenance) in the programme",

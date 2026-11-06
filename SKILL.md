@@ -19,6 +19,7 @@ Run `sound-design <command> ... --json` (installed by `pip install -e .`, Python
 | A seamless 8 s loop of a bed (for loops in an edit) | `sound-design loop-bed bed.wav -o loop.wav --duration 8 --search 1 --json` (source at least duration + crossfade long; the loop point is searched within `--search` s) |
 | A 1 s whoosh whose peak lands on the cut at 0.5 s | `sound-design stinger whoosh.wav -o stinger.wav --duration 1 --peak-at 0.5 --type whoosh --json` |
 | Check the seams of a looped file | `sound-design seam-check loop-x10.wav --period 8 --json` (or `--seams 8,16`; exit 1 when a seam fails) |
+| Effects on the cuts and emphasis captions (a cue sheet for MIX) | `sound-design sfx-cues --cuts 1.0,2.5,4.75 --emphasis 3.2 --library ./sounds --min-spacing 0.25 -o cues.json --json` (cut = whoosh, emphasis = pop unless `--effect cut=<name>`; `--file ding=ding.wav` for a generated effect) |
 | What is installed | `sound-design doctor --json`, `sound-design engines --json` |
 | What this skill declares | `sound-design contract --json` (alias `skill --json`) |
 
@@ -36,6 +37,11 @@ Every op takes `--timeout S` and `--ffmpeg-skill DIR`; those that write a file t
 - A loop's end runs into its start with no click: repeat it end to end, with no crossfade. The result reports the loop length it found (`loop.length`, within `--search` of `--duration`), how alike the crossfaded material is (`loop.similarity`; a warning below 0.5) and the measured wrap (`seam`). A whole number of bars loops best.
 - A stinger is exactly `--duration` long and its loudest 10 ms is within 10 ms of `--peak-at` (at least 20 ms from either end), else nothing is written. Tell MIX to start it `--peak-at` seconds before the cut.
 - `seam-check` is this skill's own loop check: click (±1 ms), level and octave-band spectrum of 1 s on each side. qc-skill has no loop seam check yet.
+
+## Sound-effect cue sheets
+
+- `sfx-cues` places nothing and decides nothing: the times are the caller's (from the edit's cut list and the emphasis captions), one cue per time. A time closer than `--min-spacing` to the last kept cue is dropped (listed under `dropped` with the reason), never moved. Never invent emphasis times for it.
+- Each cue says which file (`file`, `from`: library or a named WAV), where it starts (`start`; `file_offset` when it would start before 0), its `gain_db` to reach `--level` dBFS, and whether its peak (whoosh, rise, ...) or its onset (pop, ding, ...) sits on the time. Library effects need a declared licence, chosen like `library-pick` by the effect name as a tag. Hand the sheet to audio-production-skill MIX with the sources' licences.
 
 ## Ask the user before EzAudio
 

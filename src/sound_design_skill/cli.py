@@ -18,6 +18,7 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`, seam-check wh
   sound-design loop-bed <in.wav> -o <loop.wav> --duration <s> [--search 1] [--crossfade 0.25] --json      (ADR-011)
   sound-design stinger <in.wav> -o <out.wav> --duration <s> --peak-at <s> [--type whoosh|hit|rise] --json (ADR-011)
   sound-design seam-check <file.wav> --period <s> | --seams <t,t,...> --json                              (ADR-011)
+  sound-design sfx-cues --cuts <t,t,...> [--emphasis <t,...>] --library <dir> [-o cues.json] --json        (ADR-013)
 Library mode runs no engine (never ACE-Step or EzAudio) and refuses a file without a declared licence."""
 from __future__ import annotations
 
@@ -40,6 +41,8 @@ from .shaping import (DEFAULT_LOOP_CROSSFADE, DEFAULT_SEARCH, STINGER_TYPES, Loo
                       StingerRequest, loop_bed, seam_check, stinger)
 from .shaping import DEFAULT_TIMEOUT as SHAPING_TIMEOUT
 from .pcm import SEAM_WINDOW
+from .cues import DEFAULT_LEVEL, DEFAULT_SPACING, CuesRequest, sfx_cues
+from .cues import DEFAULT_TIMEOUT as CUES_TIMEOUT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,7 +166,34 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
     sc.add_argument("--timeout", type=float, default=SHAPING_TIMEOUT, help=f"per ffmpeg-skill tool (default {SHAPING_TIMEOUT:g} s)")
     sc.add_argument("--json", action="store_true")
+    cu = sub.add_parser("sfx-cues", help="a cue sheet of sound effects at the cut points / emphasis times you give, for MIX "
+                                         "to place (nothing is mixed; no cue is added)")
+    cu.add_argument("--cuts", type=_time_list, default=[], help="comma-separated cut times in seconds")
+    cu.add_argument("--emphasis", type=_time_list, default=[], help="comma-separated emphasis times in seconds")
+    cu.add_argument("--events", dest="events_path", help="JSON: [{\"time\", \"kind\": cut|emphasis, \"effect\", \"level\", "
+                                                         "\"align\": peak|onset, \"label\"}] or {\"events\": [...]}")
+    cu.add_argument("--library", help="library folder to take the effects from (kind sfx, tagged with the effect name)")
+    cu.add_argument("--effect", action="append", default=[], type=_pair, metavar="KIND=NAME",
+                    help="effect for an event kind (default cut=whoosh, emphasis=pop)")
+    cu.add_argument("--file", action="append", default=[], type=_pair, metavar="NAME=WAV",
+                    help="use this WAV for the effect NAME (e.g. a generate-sfx or stinger result)")
+    cu.add_argument("--min-spacing", type=float, default=DEFAULT_SPACING,
+                    help=f"seconds; an event closer than this to the last kept cue is dropped (default {DEFAULT_SPACING:g})")
+    cu.add_argument("--level", type=float, default=DEFAULT_LEVEL,
+                    help=f"sample peak of every cue in dBFS, unless the event gives its own (default {DEFAULT_LEVEL:g})")
+    cu.add_argument("-o", "--output", help="write the cue sheet here too (.json)")
+    cu.add_argument("--overwrite", action="store_true", help="allow replacing an existing cue sheet")
+    cu.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
+    cu.add_argument("--timeout", type=float, default=CUES_TIMEOUT, help=f"per ffmpeg-skill tool (default {CUES_TIMEOUT:g} s)")
+    cu.add_argument("--json", action="store_true")
     return ap
+
+
+def _pair(text: str) -> tuple:
+    key, sep, value = text.partition("=")
+    if not sep or not key.strip() or not value.strip():
+        raise argparse.ArgumentTypeError(f"expected NAME=VALUE, got {text!r}")
+    return key.strip(), value.strip()
 
 
 def _time_list(text: str) -> list:
@@ -258,6 +288,13 @@ def _human(doc: Dict[str, Any]) -> None:
         print(f"{doc['file']['name']}: {'passed' if doc['passed'] else 'FAILED'} ({len(doc['seams'])} seams)")
         for s in doc["seams"]:
             print(f"  {s['time']:.3f}s: {'ok' if s['passed'] else '; '.join(s['reasons'])}")
+    elif doc.get("schema", "").endswith("/sfx-cues@1"):
+        for c in doc["cues"]:
+            print(f"{c['time']:9.3f}s  {c['kind']:8} {c['effect']:10} start {c['start']:.3f}s  gain {c['gain_db']:+.1f} dB  {c['file']}")
+        for d in doc["dropped"]:
+            print(f"{d['time']:9.3f}s  dropped: {d['reason']}")
+        for w in doc.get("warnings") or []:
+            print(f"  warning: {w}")
     elif "engines" in doc and "skill_id" not in doc:
         for eid, e in doc["engines"].items():
             print(f"{eid:17} {e['status']:12} {e.get('version') or '-':10} code {e['code_license']}; "
@@ -338,6 +375,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                                               ffmpeg_skill_dir=args.ffmpeg_skill, timeout=args.timeout))
             _emit(doc, as_json)
             return 0 if doc["passed"] else 1
+        if args.cmd == "sfx-cues":
+            _emit(sfx_cues(CuesRequest(cuts=args.cuts, emphasis=args.emphasis, events_path=args.events_path,
+                                       library_dir=args.library, effects=dict(args.effect), files=dict(args.file),
+                                       min_spacing=args.min_spacing, level=args.level, output_path=args.output,
+                                       overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
+                                       timeout=args.timeout)), as_json)
+            return 0
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)
         return e.exit_code

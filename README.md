@@ -24,6 +24,7 @@ Music beds (BGM) and sound effects for the [AI Video Production OS](https://gith
 | GENERATE_BGM | `audio.bgm_generate` | ACE-Step 1.5 | 2 |
 | GENERATE_SFX | `audio.sfx_generate` | EzAudio ([ADR-005](docs/decisions.md)) | 3 |
 | Library mode | `audio.library_import` | none: your own files with a declared licence ([ADR-008](docs/decisions.md)) | 4 |
+| SFX cue sheet | (tool `sfx-cues`) | none: library effects or named WAVs ([ADR-013](docs/decisions.md)) | 9 |
 | Loop beds, stingers, seam check | (tools `loop-bed`, `stinger`, `seam-check`) | none: a WAV you already have ([ADR-011](docs/decisions.md)) | 7 |
 
 ```bash
@@ -42,6 +43,7 @@ sound-design library-pick ./sounds --kind bgm --tags piano --duration 60 -o bed.
 sound-design loop-bed bed.wav -o loop.wav --duration 8 --json          # end runs seamlessly into start; wrap measured
 sound-design stinger whoosh.wav -o st.wav --duration 1 --peak-at 0.5 --json   # exact length, peak on the cut (±10 ms)
 sound-design seam-check loop-x10.wav --period 8 --json                 # click / level / spectrum at every seam
+sound-design sfx-cues --cuts 1,2.5,4.75 --emphasis 3.2 --library ./sounds -o cues.json --json   # cue sheet for MIX
 ```
 
 For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the user first (EzAudio) and how to report licences; tests keep it in step with the contract ([ADR-009](docs/decisions.md)).
@@ -89,6 +91,10 @@ No engine runs: these take a WAV you already have and edit it through ffmpeg-ski
 - **`loop-bed <in.wav> -o loop.wav --duration <s> [--search 1] [--crossfade 0.25]`.** The loop length L is searched within `--search` seconds of `--duration` for the point whose continuation looks most like the source's start (normalised cross-correlation). The loop is `crossfade(source[L, L+x] -> source[0, x]) ++ source[x, L]`, built as two cuts, a crossfaded join and a cut. Its last sample is the source's sample L - 1 and its first is sample L, so the wrap is the source's own continuity. The wrap is measured, and a failing one is refused (`INVALID_RESULT`).
 - **`stinger <in.wav> -o out.wav --duration <s> --peak-at <s> [--type whoosh|hit|rise]`.** The peak is the centre of the loudest 10 ms. The source is cut, given a 5 / 10 ms fade where it was cut short, and padded with digital silence (the only audio the skill writes itself), so the result is exactly `--duration` long with its peak at `--peak-at`. It is re-measured and refused unless the peak is within 10 ms.
 - **`seam-check <file.wav> --period <s> | --seams <t,...>`.** A click (the largest second difference within ±1 ms over the 99th percentile within ±50 ms, limit 3), the level (RMS of 1 s on each side, limit 1.5 dB) and the spectrum (octave bands, limit 6 dB) at every seam. Exit 1 when a seam fails. qc-skill has no loop seam check, so this is the skill's own.
+
+## Sound-effect cue sheet ([ADR-013](docs/decisions.md))
+
+`sfx-cues [--cuts <t,...>] [--emphasis <t,...>] [--events <events.json>] [--library <dir>] [--effect cut|emphasis=<name>] [--file <name>=<wav>] [--min-spacing 0.25] [--level -12] [-o cues.json]` writes a cue sheet (schema `sound-design/sfx-cues@1`) for audio-production-skill MIX to place. It mixes nothing and never decides where an emphasis is: one cue per caller time, and a time closer than `--min-spacing` to the last kept cue is dropped (listed with the reason), never moved. Each effect comes from the library (kind `sfx`, tagged with the effect name, declared licence, chosen like `library-pick`) or from a named WAV, and is measured once: its peak (whoosh, rise, ...) or onset (pop, ding, ...) is put on the time (`start = time - anchor_in_file`), and `gain_db` brings its sample peak to `--level` dBFS.
 
 ## Engines (optional, [ADR-001](docs/decisions.md), [ADR-005](docs/decisions.md))
 
