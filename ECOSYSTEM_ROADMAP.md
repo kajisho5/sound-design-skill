@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-0.1.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5). `scaffold` in ecosystem.json.
+0.1.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, skill side), tempo-targeted BGM with a beat grid (step 8, skill side), SFX cue sheets (step 9), stock licence records (step 10). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
