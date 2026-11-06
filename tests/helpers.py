@@ -206,6 +206,8 @@ class GenerationParams:
     instrumental: bool = False
     vocal_language: str = "unknown"
     bpm: Optional[int] = None
+    keyscale: str = ""
+    timesignature: str = ""
     duration: float = -1.0
     inference_steps: int = 8
     seed: int = -1
@@ -230,16 +232,21 @@ class GenerationResult:
     extra_outputs: Dict[str, Any] = field(default_factory=dict)
     success: bool = True
     error: Optional[str] = None
-def _wav(path, seed, seconds, rate=48000):
-    """Stereo 16-bit PCM, a function of (seed, seconds) only: a seeded tone plus seeded noise."""
+def _wav(path, seed, seconds, rate=48000, bpm=None):
+    """Stereo 16-bit PCM, a function of (seed, seconds, bpm) only: a seeded tone plus seeded noise, and with a tempo a
+    decaying click on every beat from 0 s (an engine that keeps the requested tempo exactly)."""
     import wave
     rng = random.Random(seed)
     freq = 110.0 + rng.random() * 330.0
     n = int(round(seconds * rate))
     step = 2 * math.pi * freq / rate
     data = array.array("h", [0]) * (2 * n)
+    beat = int(round(rate * 60.0 / bpm)) if bpm else 0
     for i in range(n):
         v = int(6000 * math.sin(step * i)) + rng.randint(-500, 500)
+        if beat:
+            ph = i % beat
+            v += int(20000 * math.exp(-ph / (0.01 * rate)) * math.sin(2 * math.pi * 1000.0 * ph / rate))
         data[2 * i] = v
         data[2 * i + 1] = -v
     if sys.byteorder == "big":
@@ -262,7 +269,7 @@ def generate_music(dit_handler, llm_handler, params, config_, save_dir=None, pro
     os.makedirs(save_dir, exist_ok=True)
     key = hashlib.sha256(f"{params.caption}|{seed}|{params.duration}".encode("utf-8")).hexdigest()[:16]
     path = os.path.join(save_dir, f"{key}.wav")
-    _wav(path, seed, seconds)
+    _wav(path, seed, seconds, bpm=params.bpm)
     return GenerationResult(audios=[{"path": path, "tensor": None, "key": key, "sample_rate": 48000,
                                      "params": dict(asdict(params), seed=seed)}], status_message="ok")
 ''',

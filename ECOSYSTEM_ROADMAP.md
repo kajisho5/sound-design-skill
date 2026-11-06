@@ -40,6 +40,7 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
 - [ ] **8. Tempo-targeted generation and a tempo map** — GENERATE_BGM at a requested BPM and length, ending on a bar line, and the beat grid written as data beside the audio (no re-measuring needed downstream)
   - なぜ要るか：「120BPM、15秒」の文字PVに、ぴったり合う音楽と拍の情報を同時に渡せる
   - Done when: ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms
+  - Skill side ([#15](https://github.com/kajisho5/sound-design-skill/pull/15), ADR-012): `generate-bgm --bpm [--time-signature]` passes the tempo to ACE-Step, rounds the length to whole bars and writes `<name>.beats.json`. Open: no real ACE-Step output to measure, and ffmpeg-skill `scenes --beats` refuses audio-only input (on a video wrapper its phase was 40-60 ms off a synthetic click track); proposal to Velisa's ROADMAP
 - [ ] **9. Sound-effect cue sheet** — SFX_CUES: from cut points and emphasis times the caller gives, a cue sheet of library or generated effects (pop, whoosh, ding) with levels and a minimum spacing, for audio-production MIX to place; the skill never decides where the emphasis is
   - なぜ要るか：YouTube 風の効果音を、カットや強調テロップの時刻に揃えて置ける
   - Done when: a fixture with 10 cut times yields a cue sheet whose effects sit at those times and respect the spacing

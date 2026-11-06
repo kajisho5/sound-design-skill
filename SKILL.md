@@ -10,6 +10,7 @@ Run `sound-design <command> ... --json` (installed by `pip install -e .`, Python
 | Task | Command |
 |---|---|
 | A 60 s music bed | `sound-design generate-bgm --prompt "calm piano bed" --tags "ambient,70 bpm" --duration 60 -o bed.wav --seed 42 --json` (10-600 s) |
+| A 120 BPM bed for a 15 s lyric video, with its beat grid | `sound-design generate-bgm --prompt "upbeat pop" --duration 15 --bpm 120 --time-signature 4 -o pv.wav --json` (becomes 16 s = 8 bars; `pv.beats.json` beside it) |
 | Same, with lyrics / on the CPU | add `--lyrics lyrics.txt` / `--device cpu` (default instrumental, `--device auto`) |
 | A sound effect (after the user agreed, see below) | `sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 --acknowledge-ezaudio-training-data --json` (whole seconds, 1-10) |
 | Add the user's own file to a library | `sound-design library-import track.wav --library ./sounds --licence CC-BY-4.0 --credit "Music: name" --kind bgm --tags piano --mood calm --loopable --json` |
@@ -52,6 +53,7 @@ EzAudio (`generate-sfx`) was trained on YouTube audio (AudioSet, VGGSound, Audio
 
 - **EXPERIMENTAL.** `audio.bgm_generate`, `audio.sfx_generate` and `audio.library_import` have lifecycle `EXPERIMENTAL`. Seed determinism and duration accuracy of the real ACE-Step and EzAudio are not measured yet (the tests use fake engines with the same API). Say the result is generated and should be listened to.
 - **Generated music is not checked** for similarity to existing recordings; music recognition and copyright checks are not this skill's job. ACE-Step's commercial-use statement is the vendor's claim.
+- **Tempo.** With `--bpm` the length becomes the nearest whole number of bars (a warning says so), so the bed ends on a bar line, and the beat grid (every beat, downbeats, bar lines) is written as `<name>.beats.json` and returned as `tempo_map`. The grid is the requested one with the first beat at 0 s (`measured: false`): ACE-Step was asked for the tempo, but how well it keeps it is not measured. Pass the grid on; do not call it measured.
 - ACE-Step runs DiT only (its language model is off until the Qwen3 base licences are verified), so prompts steer style, not structure.
 - Read and pass on every entry of `warnings`.
 

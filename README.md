@@ -32,6 +32,7 @@ sound-design doctor                  # engine OK / MISSING / INCOMPATIBLE, devic
 sound-design engines --json          # status, version, licences and output-use terms per engine
 sound-design contract --json         # machine-readable contract (alias: skill --json)
 sound-design generate-bgm --prompt "calm piano bed" --tags "ambient,70 bpm" --duration 60 -o bed.wav --seed 42 --json
+sound-design generate-bgm --prompt "upbeat pop" --duration 15 --bpm 120 -o pv.wav --json   # 8 bars (16 s) + pv.beats.json
 sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 \
   --acknowledge-ezaudio-training-data --json   # required: see "Confirmation before EzAudio" below
 sound-design library-import 朝のピアノ.wav --library ./sounds --licence CC-BY-4.0 --credit "Music: 作曲者" \
@@ -47,6 +48,7 @@ For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the 
 
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
 
+- **Tempo ([ADR-012](docs/decisions.md)).** `--bpm <30-300> [--time-signature 2|3|4|6]` passes the tempo and time signature to ACE-Step (`GenerationParams.bpm` / `timesignature`), rounds the length to the nearest whole number of bars (120 BPM and 15 s become 8 bars, 16 s), and writes the beat grid beside the WAV as `<name>.beats.json` (also `tempo_map` in the result). The grid is the requested one, first beat at 0 s, `measured: false`.
 - **Inputs.** `--prompt` and / or `--tags` (joined into one caption, < 512 characters), `--duration` (ACE-Step: 10-600 s), `--seed` (drawn and recorded when omitted). Optional: `--lyrics <file>` (default instrumental) and `--device auto|cuda|mps|xpu|cpu`.
 - **Checks first.** Arguments, the output path (a new `.wav` unless `--overwrite`), the engine (`OK`) and ffmpeg-skill are all checked before anything runs.
 - **Engine.** ACE-Step runs in the worker under `SOUND_DESIGN_ACESTEP_PYTHON`, through its Python API (`AceStepHandler.initialize_service` + `generate_music`, read from its source at a fixed commit). It is pointed at the local checkpoints and is DiT only: the 5 Hz language model is off until the Qwen3 base licences are verified.
