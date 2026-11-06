@@ -576,7 +576,7 @@ Both are ffmpeg-skill's (treated as complete; not changed here). The proposal go
 **Decision.**
 - **`library-import` records what the source states**, each optional, all recorded as declared (`verified: false` as before):
   - `--licence-url`: a web address, checked for its shape only, never opened;
-  - `--licence-file`: the licence text that came with the download (UTF-8, at most 1 MiB), copied byte for byte, once per distinct file, into `<library>/licences/<sha256>.txt`, with `licence_file` and `licence_text_sha256` (the SHA-256 of the file as downloaded, line endings included) in the entry. `licences/` holds no audio, so `scan` does not list it;
+  - `--licence-file`: the licence text that came with the download (UTF-8, at most 1 MiB), line endings normalised to LF so the same licence hashes the same on every OS, copied once per distinct text (written as bytes) into `<library>/licences/<sha256>.txt`, with `licence_file` and `licence_text_sha256` (the SHA-256 of that LF text) in the entry. `licences/` holds no audio, so `scan` does not list it;
   - `--title`, `--provider`;
   - `--attribution`: the line exactly as the source asks for it;
   - `--content-id registered|not-registered`: only when the source says so. Anything else is `unknown`.

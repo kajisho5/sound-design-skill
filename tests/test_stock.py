@@ -19,7 +19,7 @@ from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
 from sound_design_skill.library import (MANIFEST_NAME, LibraryImportRequest, LibraryIndexRequest, LibraryPickRequest,
                                         library_import, library_index, library_pick, licence_info, licence_warnings)
-from sound_design_skill.provenance import sha256_file
+from sound_design_skill.provenance import sha256_text
 
 CC_BY_LINE = '"Morning Light" by Aiko Tanaka (https://example.invalid/track/42), licensed under CC-BY-4.0 ' \
              '(https://creativecommons.org/licenses/by/4.0/)'
@@ -84,9 +84,12 @@ class StockImportTests(unittest.TestCase):
                        provider="Example Music", licence_url="https://creativecommons.org/licenses/by/4.0/",
                        licence_file=self.text, content_id="not-registered")
         entry = doc["entry"]
-        sha = sha256_file(self.text)                                      # the file as downloaded, byte for byte
+        with open(self.text, encoding="utf-8") as fh:
+            sha = sha256_text(fh.read())
         self.assertEqual((entry["licence_text_sha256"], entry["licence_file"]), (sha, f"licences/{sha}.txt"))
-        self.assertEqual(sha256_file(os.path.join(self.lib, "licences", f"{sha}.txt")), sha)
+        self.assertTrue(os.path.isfile(os.path.join(self.lib, "licences", f"{sha}.txt")))
+        with open(os.path.join(self.lib, "licences", f"{sha}.txt"), "rb") as fh:
+            self.assertEqual(sha256_text(fh.read().decode("utf-8")), sha)           # stored with LF, as hashed
         self.assertEqual((entry["title"], entry["provider"], entry["content_id"]), ("Morning Light", "Example Music",
                                                                                     "not-registered"))
         self.assertEqual(doc["licence"]["attribution"], CC_BY_LINE)

@@ -30,7 +30,6 @@ Every excluded file is reported with its reasons. The same library contents and 
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -46,7 +45,7 @@ from . import SKILL_ID, __version__
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
 from .ops import check_output, tolerance_for, usable_skill
-from .provenance import build_library_provenance, sha256_file
+from .provenance import build_library_provenance, sha256_file, sha256_text
 
 MANIFEST_NAME = "sound-library.json"
 MANIFEST_SCHEMA = f"{SKILL_ID}/library@1"
@@ -512,9 +511,9 @@ def library_import(req: LibraryImportRequest, skill: Optional[FfmpegSkill] = Non
     }
 
 
-def _read_licence_text(path: Optional[str]) -> Optional[Tuple[bytes, str, str]]:
-    """(the file's bytes, their SHA-256, original name) of a licence text file the user downloaded with a track. The
-    bytes are kept exactly as downloaded (line endings included); they must be UTF-8 text."""
+def _read_licence_text(path: Optional[str]) -> Optional[Tuple[str, str, str]]:
+    """(text, SHA-256 of its UTF-8 bytes, original name) of a licence text file the user downloaded with a track. Line
+    endings are normalised to LF (a CRLF download and an LF one of the same licence get the same SHA-256 on every OS)."""
     if path is None:
         return None
     if not isinstance(path, str) or not os.path.isfile(path):
@@ -522,19 +521,19 @@ def _read_licence_text(path: Optional[str]) -> Optional[Tuple[bytes, str, str]]:
     try:
         with open(path, "rb") as fh:
             data = fh.read(MAX_LICENCE_TEXT + 1)
-        text = data.decode("utf-8-sig")
+        text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
     except (OSError, UnicodeDecodeError) as e:
         raise SoundDesignError("INVALID_ARGUMENT", f"--licence-file must be UTF-8 text: {e}", {"licence_file": path})
     if len(data) > MAX_LICENCE_TEXT or not text.strip():
         raise SoundDesignError("INVALID_ARGUMENT", "--licence-file must be non-empty text of at most 1 MiB",
                                {"licence_file": path})
-    return data, hashlib.sha256(data).hexdigest(), os.path.basename(path)
+    return text, sha256_text(text), os.path.basename(path)
 
 
-def _store_licence_text(library: str, licence: Tuple[bytes, str, str]) -> str:
-    """The licence file copied byte for byte into <library>/licences/<sha256>.txt (one copy per distinct file);
-    returns its library-relative path."""
-    data, sha, _ = licence
+def _store_licence_text(library: str, licence: Tuple[str, str, str]) -> str:
+    """The licence text (LF line endings, UTF-8) copied into <library>/licences/<sha256>.txt, one copy per distinct
+    text, written as bytes so no OS translates its line endings; returns its library-relative path."""
+    text, sha, _ = licence
     rel = f"{LICENCE_DIR}/{sha}.txt"
     dst = os.path.join(library, LICENCE_DIR, f"{sha}.txt")
     if not os.path.isfile(dst):
@@ -542,7 +541,7 @@ def _store_licence_text(library: str, licence: Tuple[bytes, str, str]) -> str:
         fd, tmp = tempfile.mkstemp(prefix=".sound-design-", suffix=".txt", dir=os.path.dirname(dst))
         try:
             with os.fdopen(fd, "wb") as fh:
-                fh.write(data)
+                fh.write(text.encode("utf-8"))
             os.replace(tmp, dst)
         finally:
             if os.path.exists(tmp):
