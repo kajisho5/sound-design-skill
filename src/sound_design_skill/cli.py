@@ -9,6 +9,7 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`, seam-check wh
   sound-design engines --json      registered engines with status and licences [--offline]
   sound-design generate-bgm --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N] --json   (ADR-004)
                             [--bpm N [--time-signature 4]]: whole bars, <out>.beats.json beside it      (ADR-012)
+                            [--model acestep-v15-xl-turbo]: the 4B XL model, >= 20 GB GPU memory       (ADR-016)
   sound-design generate-sfx --prompt <text> [--tags a,b] --duration <s> -o <out.wav> [--seed N]
                             --acknowledge-ezaudio-training-data --json                                  (ADR-006, ADR-007)
   sound-design library-import <file> --library <dir> --licence <SPDX|text> --kind bgm|sfx [--tags a,b] --json (ADR-008)
@@ -31,7 +32,7 @@ from typing import Any, Dict, List, Optional
 from . import PACKAGE_NAME, SKILL_ID, __version__
 from .contract import contract
 from .doctor import doctor, engines_report
-from .engines.acestep import DEVICES
+from .engines.acestep import DEFAULT_MODEL, DEVICES, MODEL_IDS
 from .errors import SoundDesignError
 from .library import (DEFAULT_CROSSFADE, LibraryImportRequest, LibraryIndexRequest, LibraryPickRequest, library_import,
                       library_index, library_pick)
@@ -73,6 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
                                                                             "6 (6/8)")
     b.add_argument("--lyrics", help="UTF-8 lyrics file (default: instrumental)")
     b.add_argument("--engine", help="engine id (default: acestep)")
+    b.add_argument("--model", choices=MODEL_IDS, help=f"the engine's model (default {DEFAULT_MODEL}, 2B); acestep-v15-xl-turbo "
+                                                    "is the 4B XL model: its own ~20 GB download and a GPU with >= 20 GB, "
+                                                    "else MODEL_NOT_FOUND / INSUFFICIENT_VRAM before anything runs (ADR-016)")
     b.add_argument("--device", choices=DEVICES, default="auto", help="compute device passed to the engine (default auto)")
     b.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"engine time limit in seconds (default {DEFAULT_TIMEOUT:g})")
     b.add_argument("--overwrite", action="store_true", help="allow replacing an existing output")
@@ -266,6 +270,11 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  stock {sid:18} {st['status']:12} {st['needs'] or 'download by hand'}")
         for op, o in doc["checks"]["operations"].items():
             print(f"  op {op:14} implemented={o['implemented']} engine={o['engine']} ready={o['ready']}")
+            for mid, m in (o.get("models") or {}).items():
+                need = f">= {m['min_vram_gb']:g} GB GPU ({m['vram']['status']})" if m["vram_check"] == "refuse" else "default"
+                print(f"    model {mid:22} {m['status']:8} ready={m['ready']} {need}")
+                if m.get("install") and not m["default"]:       # the default's install line is the engine's, above
+                    print(f"      install: {m['install']}")
             if o.get("confirmation_required"):
                 print(f"    confirm first: tell the user, then pass {o['confirmation']['flag']} (ADR-007)")
         for p in doc["problems"]:
@@ -274,8 +283,10 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  warning: {w}")
     elif doc.get("schema", "").endswith(("/generate-bgm@1", "/generate-sfx@1")):
         out = doc["output"]
+        model = f" ({doc['engine']['model']})" if doc["engine"].get("model") else ""
         print(f"{out['path']}: {out['duration']:.2f}s, {out['sample_rate']} Hz, {out['channels']} ch; seed "
-              f"{doc['request']['seed']} ({doc['request']['seed_source']}); engine {doc['engine']['id']} {doc['engine']['version']}")
+              f"{doc['request']['seed']} ({doc['request']['seed_source']}); engine {doc['engine']['id']} "
+              f"{doc['engine']['version']}{model}")
         if doc.get("tempo_map"):
             t = doc["tempo_map"]
             print(f"  {t['bpm']} BPM {t['time_signature']}, {t['bars']} bars; beat grid {t['path']}")
@@ -371,7 +382,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _emit(generate_bgm(BgmRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,
                                           seed=args.seed, lyrics_path=args.lyrics, engine=args.engine, device=args.device,
                                           timeout=args.timeout, overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
-                                          offline=args.offline, bpm=args.bpm, time_signature=args.time_signature)), as_json)
+                                          offline=args.offline, bpm=args.bpm, time_signature=args.time_signature,
+                                          model=args.model)), as_json)
             return 0
         if args.cmd == "generate-sfx":
             _emit(generate_sfx(SfxRequest(output_path=args.output, duration=args.duration, prompt=args.prompt, tags=args.tags,

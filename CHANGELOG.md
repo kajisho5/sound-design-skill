@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - unreleased
+
+GENERATE_BGM model selection (ADR-016). Opt-in; without `--model` a bed is made as before.
+
+- `generate-bgm --model acestep-v15-turbo|acestep-v15-xl-turbo` (request key `model`). The default stays `acestep-v15-turbo` (2B). `acestep-v15-xl-turbo` is ACE-Step 1.5 XL turbo (`ACE-Step/acestep-v15-xl-turbo`, about 4B parameters, MIT; its model card states the output may be used commercially), loaded through the same `initialize_service` / `generate_music` call with `config_path` set to it.
+- Checked before anything runs: the XL files in the checkpoints directory (`SOUND_DESIGN_ACESTEP_CHECKPOINTS`; about 20 GB more), else `MODEL_NOT_FOUND` with the download line; and a GPU with at least 20 GB (the model card's figure without CPU offload; this skill passes no offload or quantization), else the new error `INSUFFICIENT_VRAM` (exit 3) naming the default model to fall back to. GPU memory that cannot be measured is allowed with a warning.
+- The result and provenance carry the model that ran with its own licence and output-use statement (`engine.model`, `engine.weights_license`, `engine.output_use`, `engine.training_data`), `request.model`, and `provenance.parameters.model` (`selected_by`, repository, revision, the memory check).
+- `doctor` lists each BGM model under `checks.operations.bgm.models` (files, `vram`, `ready`, `install`); a missing XL model is not a problem, an XL model this GPU cannot run is a warning. The contract publishes the models (`engines.registered.acestep.models`, `default_model`), the flag in the generate-bgm `argv`, `device.model_fit`, `policy.models` and `INSUFFICIENT_VRAM`.
+
 ## 0.2.0 - unreleased
 
 SFX cue variety (ADR-015). Both opt-in; without them a cue sheet is as before.

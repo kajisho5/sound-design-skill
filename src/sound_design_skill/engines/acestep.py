@@ -16,6 +16,12 @@ ace-step/ACE-Step-1.5 at commit ca1e85fe (docs/en/INFERENCE.md, acestep/inferenc
     acestep.inference.generate_music(dit, None, GenerationParams(...), GenerationConfig(batch_size=1,
                                      use_random_seed=False, seeds=[seed], audio_format="wav"), save_dir=...)
 
+Two DiT models are selectable (ADR-016), both read from the same checkpoints directory and loaded through the same
+call (`config_path` is the model's directory name): `acestep-v15-turbo` (2B, the default, in ACE-Step/Ace-Step1.5) and
+`acestep-v15-xl-turbo` (4B, its own repository ACE-Step/acestep-v15-xl-turbo, MIT, commercial use of the output stated
+by its model card). XL is refused before anything starts unless its files are on disk and the GPU has the memory its
+card documents without CPU offload (>= 20 GB), because this skill passes no offload or quantization.
+
 `initialize_service` downloads whatever `acestep.model_downloader.check_main_model_exists` /
 `check_model_exists` find missing, from Hugging Face or, when a socket to www.google.com fails, from ModelScope
 (`_smart_download`). The Hugging Face offline variables do not stop the ModelScope path, so this engine (1) checks the
@@ -32,7 +38,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..errors import SoundDesignError
-from .base import INCOMPATIBLE, OK, Engine, EngineRequest, EngineResult, EngineSpec, in_range, missing, parse_version
+from .base import (INCOMPATIBLE, MISSING, OK, Engine, EngineRequest, EngineResult, EngineSpec, ModelSpec, in_range, missing,
+                   parse_version)
 from .lookup import python_packages, weights_dir
 
 ENV_PYTHON = "SOUND_DESIGN_ACESTEP_PYTHON"
@@ -61,6 +68,72 @@ LM_STATUS = ("off: the 5 Hz LM (fine-tuned from Qwen3-0.6B / 1.7B / 4B) is never
              "licences are verified (docs/decisions.md ADR-001 follow-up, ADR-004); generation is DiT-only")
 API_SOURCE = "ace-step/ACE-Step-1.5@ca1e85fe9430179831e6bc6be790c332190a3866"
 SUPPORTED = ((1, 5, 0), (1, 6, 0))               # >=1.5.0 <1.6.0: the release this ADR checked (pyproject 1.5.0)
+INSTALL = (f"git clone https://github.com/ace-step/ACE-Step-1.5 ~/ACE-Step-1.5 && cd ~/ACE-Step-1.5 && uv sync "
+           f"(Python 3.11-3.12), then fetch the weights once: uv run acestep-download (or huggingface-cli download "
+           f"{HF_REPO} --local-dir ~/ACE-Step-1.5/checkpoints); set {ENV_PYTHON}=~/ACE-Step-1.5/.venv/bin/python and "
+           f"{ENV_CHECKPOINTS}=~/ACE-Step-1.5/checkpoints")
+WEIGHTS_LICENSE = ("MIT (Hugging Face ACE-Step/Ace-Step1.5 and the acestep-v15-* / acestep-5Hz-lm-* model cards); "
+                   "bundled text encoder Qwen3-Embedding-0.6B Apache-2.0")
+OUTPUT_USE = ("commercial use of generated music stated by the model card (\"You can strictly use the generated music "
+              "for commercial purposes\"); the README asks users to check originality and disclose AI involvement")
+TRAINING_DATA = ("model card claim: licensed tracks, royalty-free / public-domain music and MIDI-rendered synthetic "
+                 "audio; the dataset itself is not published (unverified)")
+
+# ADR-016: ACE-Step 1.5 XL turbo, read on Hugging Face at d4a0b288 (2026-04-07) and in ace-step/ACE-Step-1.5 at
+# ca1e85fe (model_downloader.SUBMODEL_REGISTRY, _CHECKPOINT_TO_VARIANT; docs/en/INFERENCE.md lists it as a turbo
+# model). Its files, as that repository lists them; `silence_latent.pt` is required by the loader
+# (_load_main_model_from_checkpoint raises without it). The .py model code is copied in by ACE-Step itself.
+XL_MODEL = "acestep-v15-xl-turbo"
+XL_REPO = "ACE-Step/acestep-v15-xl-turbo"
+XL_FILES = (f"{XL_MODEL}/config.json", f"{XL_MODEL}/model.safetensors.index.json",
+            *(f"{XL_MODEL}/model-0000{i}-of-00004.safetensors" for i in range(1, 5)), f"{XL_MODEL}/silence_latent.pt")
+
+MODELS = (
+    ModelSpec(
+        id=DIT_MODEL, default=True,
+        description="ACE-Step 1.5 turbo: 2B DiT, 8 steps, no CFG; shipped in the main repository with the VAE, the text "
+                    "encoder and the 1.7B LM",
+        parameters="2B DiT", repository=HF_REPO, revision=None,
+        weights_license=WEIGHTS_LICENSE, output_use=OUTPUT_USE, training_data=TRAINING_DATA,
+        min_vram_gb=4.0, vram_check="warn",
+        vram_note="the model card's \"less than 4GB of VRAM\"; CPU documented, so less only warns",
+        vram_documented=("model card: runs locally with less than 4 GB of VRAM",
+                         "README: <= 6 GB DiT only with INT8 quantization + CPU offload, 6-16 GB with a 5 Hz LM"),
+        download_gb=10.09, required_files=(f"{DIT_MODEL}/config.json", f"{DIT_MODEL}/model.safetensors"),
+        install=INSTALL,
+        sources=("https://huggingface.co/ACE-Step/Ace-Step1.5", "https://github.com/ace-step/ACE-Step-1.5")),
+    ModelSpec(
+        id=XL_MODEL,
+        description="ACE-Step 1.5 XL turbo: 4B DiT (about 4B parameters), 8 steps, no CFG; higher audio quality than "
+                    "the 2B turbo by its model card; loaded with the main repository's VAE and text encoder",
+        parameters="4B DiT", repository=XL_REPO, revision="d4a0b288b83ebb7e25a8c0b32c573c22e134e8ee",
+        weights_license="MIT (Hugging Face ACE-Step/acestep-v15-xl-turbo model card, license: mit); with the VAE and "
+                        "text encoder of ACE-Step/Ace-Step1.5 (MIT), text encoder Qwen3-Embedding-0.6B Apache-2.0",
+        output_use="commercial use of generated music stated by the acestep-v15-xl-turbo model card (\"Generated "
+                   "music can be used for commercial purposes\"); the README asks users to check originality and "
+                   "disclose AI involvement",
+        training_data="model card claim: licensed music, royalty-free / public-domain and synthetic (MIDI-to-Audio) "
+                      "data; the dataset itself is not published (unverified)",
+        min_vram_gb=20.0, vram_check="refuse",
+        vram_note="the model card's figure without CPU offload; this skill passes no offload or quantization",
+        vram_documented=("model card: >= 12 GB with CPU offload + INT8 quantization",
+                         "model card: >= 16 GB with CPU offload",
+                         "model card: >= 20 GB without offload (recommended)",
+                         "model card: >= 24 GB for full quality (XL + the 4B LM)",
+                         "ACE-Step gpu_config: about 9 GB for the XL DiT weights (bf16)"),
+        download_gb=19.95, required_files=XL_FILES,
+        install=(f"cd ~/ACE-Step-1.5 && uv run acestep-download --model {XL_MODEL} (about 20 GB more, into "
+                 f"~/ACE-Step-1.5/checkpoints/{XL_MODEL}; or huggingface-cli download {XL_REPO} --local-dir "
+                 f"~/ACE-Step-1.5/checkpoints/{XL_MODEL}); set {ENV_CHECKPOINTS}=~/ACE-Step-1.5/checkpoints, the "
+                 f"directory that also holds the main model"),
+        licence_checked="2026-11-12 (docs/decisions.md ADR-016)",
+        sources=(f"https://huggingface.co/{XL_REPO}", f"https://huggingface.co/api/models/{XL_REPO}",
+                 "https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/model_downloader.py",
+                 "https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/docs/en/GPU_COMPATIBILITY.md",
+                 "https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/docs/en/INFERENCE.md")),
+)
+MODEL_IDS = tuple(m.id for m in MODELS)
+DEFAULT_MODEL = DIT_MODEL
 
 SPEC = EngineSpec(
     id="acestep",
@@ -68,12 +141,9 @@ SPEC = EngineSpec(
     description="ACE-Step 1.5 (2B turbo DiT + optional 5 Hz LM planner): text-to-music, instrumental beds or songs, 10 s to 10 min",
     kind="python",
     code_license="MIT (ace-step/ACE-Step-1.5 LICENSE; bundled nano-vllm MIT)",
-    weights_license="MIT (Hugging Face ACE-Step/Ace-Step1.5 and the acestep-v15-* / acestep-5Hz-lm-* model cards); "
-                    "bundled text encoder Qwen3-Embedding-0.6B Apache-2.0",
-    output_use="commercial use of generated music stated by the model card (\"You can strictly use the generated music "
-               "for commercial purposes\"); the README asks users to check originality and disclose AI involvement",
-    training_data="model card claim: licensed tracks, royalty-free / public-domain music and MIDI-rendered synthetic "
-                  "audio; the dataset itself is not published (unverified)",
+    weights_license=WEIGHTS_LICENSE,
+    output_use=OUTPUT_USE,
+    training_data=TRAINING_DATA,
     credit=None,
     credit_required=False,
     watermark=None,
@@ -83,10 +153,7 @@ SPEC = EngineSpec(
     isolation="worker subprocess under ACE-Step's own environment (SOUND_DESIGN_ACESTEP_PYTHON): it pins torch builds "
               "per platform, gradio, transformers <4.58 and needs Python 3.11-3.12; this package never imports it",
     version_range=">=1.5.0 <1.6.0",
-    install=(f"git clone https://github.com/ace-step/ACE-Step-1.5 ~/ACE-Step-1.5 && cd ~/ACE-Step-1.5 && uv sync "
-             f"(Python 3.11-3.12), then fetch the weights once: uv run acestep-download (or huggingface-cli download "
-             f"{HF_REPO} --local-dir ~/ACE-Step-1.5/checkpoints); set {ENV_PYTHON}=~/ACE-Step-1.5/.venv/bin/python and "
-             f"{ENV_CHECKPOINTS}=~/ACE-Step-1.5/checkpoints"),
+    install=INSTALL,
     located_by=(f"${ENV_PYTHON} (else this Python)", f"${ENV_CHECKPOINTS} (else the Hugging Face cache, {HF_REPO})"),
     roadmap_step=2,
     lm_status=LM_STATUS,
@@ -96,12 +163,14 @@ SPEC = EngineSpec(
         "non-loopback socket (ADR-004)",
         "the PyPI project `ace-step` (0.1.0, Apache-2.0) is not this release; install from the git checkout",
         "the README disclaimer is guidance, not a licence condition: verify originality, disclose AI involvement",
-        "XL (4B DiT) models need >= 12 GB VRAM; not the default here",
+        f"XL turbo (4B DiT, {XL_REPO}, MIT) is selectable with --model {XL_MODEL}: its own ~20 GB download into the "
+        "checkpoints directory, and >= 20 GB GPU memory as run here (no offload); not the default (ADR-016)",
     ),
     sources=("https://github.com/ace-step/ACE-Step-1.5", "https://github.com/ace-step/ACE-Step-1.5/blob/main/LICENSE",
              "https://github.com/ace-step/ACE-Step-1.5/blob/main/pyproject.toml",
              "https://huggingface.co/ACE-Step/Ace-Step1.5", "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
              "https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/INSTALL.md"),
+    models=MODELS,
 )
 
 
@@ -131,7 +200,12 @@ class AceStepEngine(Engine):
                                 "model", interpreter=where), version=vstr)
         lms: List[str] = [m for m in LM_MODELS if has_weights(weights["dir"] / m)]
         return {"status": OK, "version": vstr, "detail": f"{DIST} {vstr}, {DIT_MODEL} ({weights['source']})", "model": DIT_MODEL,
-                "lm_models": lms, "lm_note": "present on disk, not used: " + LM_STATUS, "interpreter": where}
+                "lm_models": lms, "lm_note": "present on disk, not used: " + LM_STATUS, "interpreter": where,
+                "model_status": {m.id: model_files(m, weights) for m in MODELS}}
+
+    def model_status(self, model_id: Optional[str] = None) -> Dict[str, Any]:
+        """A model's files in the checkpoints directory doctor uses (ADR-016). File checks only: nothing is imported."""
+        return model_files(self.spec.model(model_id), weights_dir(HF_REPO, REQUIRED_FILES, ENV_CHECKPOINTS))
 
     def process(self, req: EngineRequest) -> EngineResult:
         """Runs in the worker only (under SOUND_DESIGN_ACESTEP_PYTHON). Checks first, imports ACE-Step last."""
@@ -146,9 +220,14 @@ class AceStepEngine(Engine):
         device = req.params.get("device", "auto")
         if device not in DEVICES:
             raise SoundDesignError("INVALID_ARGUMENT", f"device must be one of {', '.join(DEVICES)}", {"device": device})
+        model = self.spec.model(req.params.get("model"))
         info = self.require()
         weights = weights_dir(HF_REPO, REQUIRED_FILES, ENV_CHECKPOINTS)
         ckpt: Path = weights["dir"]
+        files = model_files(model, weights)
+        if files["status"] != OK:
+            raise SoundDesignError("MODEL_NOT_FOUND", f"model {model.id!r} is not on disk: {files['detail']}",
+                                   {"engine": self.id, "model": model.id, "missing": files["missing"], "install": model.install})
         seed = req.seed if req.seed is not None else random.SystemRandom().randrange(2 ** 32)
         out_dir = os.path.join(os.path.dirname(os.path.abspath(req.output_path)), "acestep-out")
 
@@ -157,7 +236,7 @@ class AceStepEngine(Engine):
         os.environ.pop("ACESTEP_VAE_CHECKPOINT", None)
         downloader = importlib.import_module("acestep.model_downloader")
         attempts = refuse_downloads(downloader)
-        if not (downloader.check_main_model_exists(ckpt) and downloader.check_model_exists(DIT_MODEL, ckpt)):
+        if not (downloader.check_main_model_exists(ckpt) and downloader.check_model_exists(model.id, ckpt)):
             raise SoundDesignError("MODEL_NOT_FOUND", f"ACE-Step's own check finds the checkpoints in {weights['source']} "
                                    "incomplete; it would download them, so nothing was run", {"engine": self.id,
                                                                                                "install": self.spec.install})
@@ -165,7 +244,7 @@ class AceStepEngine(Engine):
         inference = importlib.import_module("acestep.inference")
         dit = handler_mod.AceStepHandler()
         try:
-            status, ok = dit.initialize_service(project_root=str(ckpt.parent), config_path=DIT_MODEL, device=device,
+            status, ok = dit.initialize_service(project_root=str(ckpt.parent), config_path=model.id, device=device,
                                                 vae_checkpoint=VAE_VARIANT)
         except Exception as exc:     # upstream returns (message, False); a raise is treated the same way
             status, ok = f"{type(exc).__name__}: {exc}", False
@@ -195,7 +274,7 @@ class AceStepEngine(Engine):
             raise SoundDesignError("INVALID_RESULT", f"ACE-Step used seed {used_seed!r}, not the requested {seed}",
                                    {"engine": self.id, "seed": seed, "used_seed": used_seed})
         os.replace(path, req.output_path)
-        return EngineResult(output_path=req.output_path, engine_version=str(info.get("version")), model=DIT_MODEL,
+        return EngineResult(output_path=req.output_path, engine_version=str(info.get("version")), model=model.id,
                             sample_rate=int(audios[0].get("sample_rate") or SAMPLE_RATE), seed=seed, duration=float(req.duration),
                             extra={"device": getattr(dit, "device", device), "requested_device": device,
                                    "lm": {"enabled": False, "status": LM_STATUS}, "api": API_SOURCE,
@@ -203,6 +282,24 @@ class AceStepEngine(Engine):
                                    "generation_config": {"batch_size": 1, "use_random_seed": False, "seeds": [seed],
                                                          "audio_format": "wav"},
                                    "vae": VAE_VARIANT})
+
+
+def model_files(model: ModelSpec, weights: Dict[str, Any]) -> Dict[str, Any]:
+    """Whether `model`'s files are in the checkpoints directory `weights` names (lookup.weights_dir). ACE-Step reads
+    every model from that one directory (`<checkpoints>/<model id>/`), so a model from its own repository has to be
+    downloaded into it: a Hugging Face cache snapshot of the main repository never holds it."""
+    if weights.get("dir") is None:
+        return {"status": MISSING, "missing": list(model.required_files), "install": model.install,
+                "detail": f"the main model is not complete in {weights.get('source')}, so {model.id} cannot run"}
+    root = Path(weights["dir"])
+    absent = [r for r in model.required_files if not (root / r).is_file()]
+    if not absent:
+        return {"status": OK, "missing": [], "install": None, "detail": f"{model.id} ({weights['source']})"}
+    detail = f"{len(absent)} of {len(model.required_files)} files of {model.id} missing in {weights['source']} ({', '.join(absent)})"
+    if model.repository != HF_REPO and weights.get("source") != f"${ENV_CHECKPOINTS}":
+        detail += (f"; ACE-Step reads every model from one checkpoints directory, so set {ENV_CHECKPOINTS} to a directory "
+                   f"holding the main model and {model.id}/")
+    return {"status": MISSING, "missing": absent, "install": model.install, "detail": detail}
 
 
 def has_weights(directory: Path) -> bool:

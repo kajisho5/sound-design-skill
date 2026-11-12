@@ -17,7 +17,7 @@
 
 Music beds (BGM) and sound effects for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Generated files are handed to [audio-production-skill](https://github.com/kajisho5/audio-production-skill) MIX, which places them in the programme; nothing is mixed here. Probing goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.2.0, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
+**Status: 0.3.0, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
 
 | Op | Capability | Engine | Step |
 |---|---|---|---|
@@ -34,6 +34,7 @@ sound-design engines --json          # status, version, licences and output-use 
 sound-design contract --json         # machine-readable contract (alias: skill --json)
 sound-design generate-bgm --prompt "calm piano bed" --tags "ambient,70 bpm" --duration 60 -o bed.wav --seed 42 --json
 sound-design generate-bgm --prompt "upbeat pop" --duration 15 --bpm 120 -o pv.wav --json   # 8 bars (16 s) + pv.beats.json
+sound-design generate-bgm --prompt "cinematic strings" --duration 60 -o xl.wav --model acestep-v15-xl-turbo --json   # 4B XL, >= 20 GB GPU
 sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 \
   --acknowledge-ezaudio-training-data --json   # required: see "Confirmation before EzAudio" below
 sound-design library-import 朝のピアノ.wav --library ./sounds --licence CC-BY-4.0 --credit "Music: 作曲者" \
@@ -52,13 +53,26 @@ For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the 
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
 
 - **Tempo ([ADR-012](docs/decisions.md)).** `--bpm <30-300> [--time-signature 2|3|4|6]` passes the tempo and time signature to ACE-Step (`GenerationParams.bpm` / `timesignature`), rounds the length to the nearest whole number of bars (120 BPM and 15 s become 8 bars, 16 s), and writes the beat grid beside the WAV as `<name>.beats.json` (also `tempo_map` in the result). The grid is the requested one, first beat at 0 s, `measured: false`.
-- **Inputs.** `--prompt` and / or `--tags` (joined into one caption, < 512 characters), `--duration` (ACE-Step: 10-600 s), `--seed` (drawn and recorded when omitted). Optional: `--lyrics <file>` (default instrumental) and `--device auto|cuda|mps|xpu|cpu`.
+- **Inputs.** `--prompt` and / or `--tags` (joined into one caption, < 512 characters), `--duration` (ACE-Step: 10-600 s), `--seed` (drawn and recorded when omitted). Optional: `--lyrics <file>` (default instrumental), `--device auto|cuda|mps|xpu|cpu` and `--model` (below).
+- **Model ([ADR-016](docs/decisions.md)).** `--model acestep-v15-turbo|acestep-v15-xl-turbo` (request key `model`). The default is the 2B turbo model, as before. `acestep-v15-xl-turbo` is ACE-Step 1.5 XL turbo, a 4B DiT (MIT, commercial use of the output stated by its model card), loaded through the same API. See [Choosing the BGM model](#choosing-the-bgm-model-gpu-memory) for its GPU memory and download.
 - **Checks first.** Arguments, the output path (a new `.wav` unless `--overwrite`), the engine (`OK`) and ffmpeg-skill are all checked before anything runs.
 - **Engine.** ACE-Step runs in the worker under `SOUND_DESIGN_ACESTEP_PYTHON`, through its Python API (`AceStepHandler.initialize_service` + `generate_music`, read from its source at a fixed commit). It is pointed at the local checkpoints and is DiT only: the 5 Hz language model is off until the Qwen3 base licences are verified.
 - **Validation.** ffmpeg-skill `probe` checks the WAV: one audio stream, the engine's sample rate, the requested duration ± max(0.1 s, 1 %). Then one rename puts it in place; nothing is written otherwise.
-- **Result.** The JSON carries the provenance: engine, version and model, code / weights licences, output-use statement, LM status, caption, seed, requested and measured duration, output SHA-256, the exact ACE-Step parameters and the ffmpeg-skill version. The WAV goes to audio-production-skill MIX.
+- **Result.** The JSON carries the provenance: engine, version and model, code / weights licences, output-use statement, LM status, caption, seed, requested and measured duration, output SHA-256, the exact ACE-Step parameters and the ffmpeg-skill version. The licence and output-use fields are those of the model that ran, and `provenance.parameters.model` says which model it was, whether it was requested, its repository and the GPU memory check. The WAV goes to audio-production-skill MIX.
 
 Seed determinism and duration accuracy of the real ACE-Step are not measured yet (no install here); the tests use a fake engine with the same API.
+
+### Choosing the BGM model (GPU memory)
+
+| Model | Size | Weights licence / output use | GPU memory as this skill runs it | Download |
+|---|---|---|---|---|
+| `acestep-v15-turbo` (default) | 2B DiT | MIT; commercial use stated by the model card | < 4 GB (model card); CPU documented; doctor only warns | ~10 GB, the main repository `ACE-Step/Ace-Step1.5` |
+| `acestep-v15-xl-turbo` | 4B DiT | MIT; commercial use stated by its own model card | **>= 20 GB**, else `INSUFFICIENT_VRAM` before anything runs | ~20 GB more, `ACE-Step/acestep-v15-xl-turbo`, into the same checkpoints directory |
+
+- **Why 20 GB.** The XL model card lists >= 12 GB with CPU offload and INT8 quantization, >= 16 GB with CPU offload, >= 20 GB without offload (recommended) and >= 24 GB with the 4B LM. This skill passes no offload or quantization to ACE-Step, so the no-offload figure applies. The XL DiT weights alone take about 9 GB of GPU memory (ACE-Step's `gpu_config`). GPUs report a little less than their nominal size, so the measured memory is compared with a 0.5 GB margin, as ACE-Step does for its 16 GB class.
+- **What is measured.** The largest NVIDIA GPU (`nvidia-smi`) or Apple Silicon's unified memory (`sysctl`; the CPU shares it, so the GPU budget is lower). With no GPU found, XL is refused. When a GPU's memory cannot be read (ROCm, an `nvidia-smi` that gives no rows), XL runs and the result warns that the memory was not checked.
+- **Getting it.** From the ACE-Step checkout: `uv run acestep-download --model acestep-v15-xl-turbo`, or `huggingface-cli download ACE-Step/acestep-v15-xl-turbo --local-dir <checkpoints>/acestep-v15-xl-turbo`. Then point `SOUND_DESIGN_ACESTEP_CHECKPOINTS` at that checkpoints directory: ACE-Step reads every model from one directory, so a Hugging Face cache snapshot of the main repository does not find XL. Without its files, `--model acestep-v15-xl-turbo` stops with `MODEL_NOT_FOUND` and `details.install` gives the line. Nothing is downloaded by the skill.
+- **Doctor.** `doctor --json` lists both models under `checks.operations.bgm.models`: files, `vram` (`OK`, `INSUFFICIENT`, `NO_GPU`, `UNKNOWN`), `ready` and `install`. A missing XL model is not a problem (it is opt-in); an XL model on disk that this GPU cannot run is a warning.
 
 ## GENERATE_SFX ([ADR-006](docs/decisions.md))
 
@@ -107,7 +121,7 @@ Two opt-in controls ([ADR-015](docs/decisions.md)); without them the sheet is as
 
 | Engine | Code / weights licence | Output use | Hardware | How the skill reaches it |
 |---|---|---|---|---|
-| `acestep` ACE-Step 1.5 (BGM) | MIT / MIT (text encoder Qwen3-Embedding-0.6B Apache-2.0) | commercial use stated by the model card; training data is the vendor's claim (unverified) | < 4 GB VRAM for the 2B turbo model; CUDA, MPS, ROCm, XPU, CPU documented | worker under its own environment: `SOUND_DESIGN_ACESTEP_PYTHON`; weights in `SOUND_DESIGN_ACESTEP_CHECKPOINTS` or the Hugging Face cache |
+| `acestep` ACE-Step 1.5 (BGM) | MIT / MIT (text encoder Qwen3-Embedding-0.6B Apache-2.0) | commercial use stated by the model card; training data is the vendor's claim (unverified) | < 4 GB VRAM for the 2B turbo model (default); >= 20 GB for the 4B XL turbo model (`--model`, [ADR-016](docs/decisions.md)); CUDA, MPS, ROCm, XPU, CPU documented | worker under its own environment: `SOUND_DESIGN_ACESTEP_PYTHON`; weights in `SOUND_DESIGN_ACESTEP_CHECKPOINTS` or the Hugging Face cache |
 | `ezaudio` EzAudio-XL (SFX) | MIT / MIT (text encoder flan-t5-xl Apache-2.0) | no statement on the output; the licences do not restrict it. Trained on YouTube audio (AudioSet, VGGSound, AudioCaps): recorded as a risk in every result | not documented (unverified); CUDA or CPU | worker under its own environment: `SOUND_DESIGN_EZAUDIO_PYTHON`; the checkout and its `ckpts/` in `SOUND_DESIGN_EZAUDIO_DIR`; Flan-T5-XL in the Hugging Face cache |
 
 Rejected for SFX ([ADR-005](docs/decisions.md)):
@@ -123,7 +137,7 @@ ACE-Step needs Python 3.11-3.12 and pins its own torch, so it lives in its own c
 
 EzAudio is a git checkout with an unpinned `requirements.txt`, so give it its own `.venv` too. Left alone, it downloads a missing checkpoint itself. Doctor reports `MISSING` until the DiT and VAE checkpoints and the Flan-T5-XL snapshot are on disk. In the worker, both checkpoint paths are passed explicitly and `EzAudio.download_ckpt` refuses; the same socket guard applies.
 
-`doctor` also reports the compute device: NVIDIA GPUs and their total / free memory (`nvidia-smi`), Apple Silicon unified memory, or CPU only, with ACE-Step's own recommended model tier for that memory. It never imports torch.
+`doctor` also reports the compute device: NVIDIA GPUs and their total / free memory (`nvidia-smi`), Apple Silicon unified memory, or CPU only, with ACE-Step's own recommended model tier for that memory, and whether each BGM model fits it. It never imports torch.
 
 ## ffmpeg-skill
 
@@ -131,7 +145,7 @@ The skill looks for ffmpeg-skill in this order: `--ffmpeg-skill`, `SOUND_DESIGN_
 
 ## JSON and errors
 
-With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](docs/decisions.md)). A failure is `{"ok": false, "error": {"code", "message", "retryable", "details"}}`, and the code fixes the exit code (`contract --json` lists them under `errors`). `TOOL_ERROR`, `ENGINE_TIMEOUT` and `CANCELLED` are retryable. A declared op that is not built yet is `NOT_IMPLEMENTED` (exit 5). A library file without a declared licence is `LICENCE_REQUIRED` (exit 2, [ADR-008](docs/decisions.md)). An engine that needs the user's acknowledgement first (EzAudio) is `CONFIRMATION_REQUIRED` (exit 8) until its flag is passed ([ADR-007](docs/decisions.md)).
+With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](docs/decisions.md)). A failure is `{"ok": false, "error": {"code", "message", "retryable", "details"}}`, and the code fixes the exit code (`contract --json` lists them under `errors`). `TOOL_ERROR`, `ENGINE_TIMEOUT` and `CANCELLED` are retryable. A declared op that is not built yet is `NOT_IMPLEMENTED` (exit 5). A library file without a declared licence is `LICENCE_REQUIRED` (exit 2, [ADR-008](docs/decisions.md)). An engine that needs the user's acknowledgement first (EzAudio) is `CONFIRMATION_REQUIRED` (exit 8) until its flag is passed ([ADR-007](docs/decisions.md)). A `--model` that needs more GPU memory than the machine has is `INSUFFICIENT_VRAM` (exit 3, [ADR-016](docs/decisions.md)).
 
 ## Tests
 
@@ -139,7 +153,7 @@ With `--json`, stdout holds exactly one JSON document, ASCII only ([ADR-003](doc
 python -m unittest discover -s tests -v
 ```
 
-Unit tests need no engine, no weights, no GPU, no FFmpeg and no network. Package lookups are mocked or pointed at a fake install, the checkpoints and the Hugging Face cache are temporary directories, and `nvidia-smi` / `sysctl` are mocked. GENERATE_BGM runs the real worker against a fake `acestep` package with ACE-Step's verified API, which writes a deterministic WAV for a seed and a duration. GENERATE_SFX does the same against a fake EzAudio checkout (`api/ezaudio.py` with the verified API, its `ckpts/` layout and a Flan-T5-XL cache snapshot). The unit tests validate it through a stub ffmpeg-skill, the integration tests through the real one. Library mode's unit tests (`tests/test_library.py`) use a stub ffmpeg-skill that cuts and joins PCM WAVs with the `wave` module. Its integration test writes WAVs under Japanese names and runs import, index and pick through the real ffmpeg-skill. The integration tests need a real ffmpeg-skill checkout (`SOUND_DESIGN_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present.
+Unit tests need no engine, no weights, no GPU, no FFmpeg and no network. Package lookups are mocked or pointed at a fake install, the checkpoints and the Hugging Face cache are temporary directories, and `nvidia-smi` / `sysctl` are mocked. GENERATE_BGM runs the real worker against a fake `acestep` package with ACE-Step's verified API, which writes a deterministic WAV for a seed and a duration. GENERATE_SFX does the same against a fake EzAudio checkout (`api/ezaudio.py` with the verified API, its `ckpts/` layout and a Flan-T5-XL cache snapshot). The unit tests validate it through a stub ffmpeg-skill, the integration tests through the real one. Library mode's unit tests (`tests/test_library.py`) use a stub ffmpeg-skill that cuts and joins PCM WAVs with the `wave` module. Its integration test writes WAVs under Japanese names and runs import, index and pick through the real ffmpeg-skill. Model selection's tests (`tests/test_models.py`) mock `nvidia-smi` / `sysctl` for the GPU memory and lay out the XL model's files as empty stand-ins; nothing is downloaded. The integration tests need a real ffmpeg-skill checkout (`SOUND_DESIGN_FFMPEG_SKILL_DIR` or `../ffmpeg-skill`) and FFmpeg. The OS registry conformance checks run when `AI_VIDEO_PRODUCTION_OS_DIR` (or `../AI-video-production-OS`) is present.
 
 ## Licence
 

@@ -681,7 +681,7 @@ class GenerateBgmTests(unittest.TestCase):
         self.assertAlmostEqual(doc["output"]["duration"], 12.0, places=3)
         self.assertEqual((doc["output"]["sample_rate"], doc["output"]["channels"]), (48000, 2))
         self.assertEqual(doc["request"], {"prompt": "calm piano bed, ambient, 70 bpm", "duration": 12.0, "seed": 1234,
-                                          "seed_source": "given"})
+                                          "seed_source": "given", "model": "acestep-v15-turbo"})
         p = doc["provenance"]
         self.assertEqual((p["op"], p["seed"], p["prompt"]["text"]), ("bgm", 1234, "calm piano bed, ambient, 70 bpm"))
         self.assertEqual(p["output"]["sha256"], sha256_file(self.out()))
@@ -696,6 +696,10 @@ class GenerateBgmTests(unittest.TestCase):
         self.assertIn("Qwen3", e["lm_status"])
         self.assertNotIn("interpreter", e)
         self.assertEqual(p["parameters"]["tags"], ["ambient", "70 bpm"])
+        # ADR-016: the default model is recorded as such, with the spec's own licence text and no memory check
+        self.assertEqual((p["parameters"]["model"]["id"], p["parameters"]["model"]["selected_by"], p["parameters"]["model"]["vram"]),
+                         ("acestep-v15-turbo", "default", None))
+        self.assertEqual((e["weights_license"], e["output_use"]), (acestep.SPEC.weights_license, acestep.SPEC.output_use))
         self.assertEqual(p["parameters"]["lm"]["enabled"], False)
         self.assertEqual(p["parameters"]["generation_config"]["seeds"], [1234])
         self.assertEqual(p["ffmpeg_skill"]["version"], "2.23.0")

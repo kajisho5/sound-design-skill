@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from . import PACKAGE_NAME, SKILL_ID, __version__
-from .device import ACESTEP_TIERS
+from .device import ACESTEP_TIERS, FIT_STATUSES, REFUSED_FITS, VRAM_TOLERANCE_GB
 from .doctor import DOCTOR_SCHEMA, IMPLEMENTED_OPS, OP_STEP
 from .engines import DEFAULT_ENGINE, confirmation_for, engine_ids, engines_for, get_engine
 from .engines import ezaudio
-from .engines.acestep import DEVICES
+from .engines.acestep import DEFAULT_MODEL, DEVICES, MODEL_IDS
 from .errors import ERROR_TABLE
 from .ffmpeg_skill import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .provenance import ENGINE_FIELDS
@@ -29,7 +29,8 @@ _OP_TOOLS = {
                        "seed (drawn when omitted; always recorded)"],
             "argv": ["generate-bgm", "--prompt <text>", "[--tags <a,b,...>]", "--duration <seconds>", "-o <out.wav>",
                      "[--seed <int>]", f"[--bpm <{tempo.BPM_RANGE[0]}-{tempo.BPM_RANGE[1]}>]",
-                     "[--time-signature " + "|".join(map(str, tempo.TIME_SIGNATURES)) + "]", "[--engine acestep]", "[--lyrics <file>]", f"[--device {'|'.join(DEVICES)}]",
+                     "[--time-signature " + "|".join(map(str, tempo.TIME_SIGNATURES)) + "]", "[--engine acestep]",
+                     "[--model " + "|".join(MODEL_IDS) + "]", "[--lyrics <file>]", f"[--device {'|'.join(DEVICES)}]",
                      "[--timeout 3600]", "[--overwrite]", "[--ffmpeg-skill <dir>]", "[--offline]", "--json"],
             "schema": "sound-design/generate-bgm@1",
             "duration_tolerance": "max(0.1 s, 1 % of the requested duration), measured by ffmpeg-skill/probe",
@@ -39,7 +40,20 @@ _OP_TOOLS = {
                                   "the engine's range, so the bed ends on a bar line",
                       "beat_grid": f"<output>{tempo.GRID_SUFFIX} beside the WAV (schema {tempo.GRID_SCHEMA}) and "
                                    "tempo_map in the result: every beat, downbeats, bar lines; first beat assumed at 0 s; "
-                                   "measured: false (ADR-012)"}},
+                                   "measured: false (ADR-012)"},
+            "models": {"flag": "--model", "request_key": "model", "default": DEFAULT_MODEL, "choices": list(MODEL_IDS),
+                       "specs": "engines.registered.acestep.models (licence, output use, files, GPU memory, download "
+                                "size per model)",
+                       "readiness": "doctor checks.operations.bgm.models",
+                       "checked_before_any_work": {"files": "MODEL_NOT_FOUND, details.install = the model's download line",
+                                                   "gpu_memory": "INSUFFICIENT_VRAM for a model whose vram_check is "
+                                                                 "refuse, when the measured GPU memory (+ "
+                                                                 f"{VRAM_TOLERANCE_GB:g} GB) is below its min_vram_gb or "
+                                                                 "no GPU is found; not measured: allowed with a warning; "
+                                                                 "details.default_model is the fallback"},
+                       "recorded_in": ["request.model", "engine.model", "engine.weights_license", "engine.output_use",
+                                       "provenance.engine.model", "provenance.parameters.model"],
+                       "adr": "docs/decisions.md ADR-016"}},
     "sfx": {"description": "A sound effect from a prompt / tags, a duration in whole seconds and a seed (EzAudio, mono "
                            "24 kHz); validated through ffmpeg-skill/probe and placed with one rename",
             "inputs": ["prompt and / or tags (joined, < 512 characters; the text encoder reads 100 tokens)",
@@ -236,7 +250,10 @@ def contract() -> Dict[str, Any]:
                   "statuses": ["MISSING (API key not set)", "KEY_SET", "MANUAL (no API)"], "fetch": stock.FETCH_NOTE},
         "device": {"reported_by": "doctor checks.device", "detected_by": ["nvidia-smi --query-gpu", "platform + sysctl hw.memsize (Apple Silicon)",
                                                                           "rocm-smi on PATH (noticed, not measured)"],
-                   "statuses": ["OK", "CPU_ONLY", "UNKNOWN"], "acestep_tiers": [t for _, t in ACESTEP_TIERS]},
+                   "statuses": ["OK", "CPU_ONLY", "UNKNOWN"], "acestep_tiers": [t for _, t in ACESTEP_TIERS],
+                   "model_fit": {"statuses": list(FIT_STATUSES), "refused": list(REFUSED_FITS),
+                                 "tolerance_gb": VRAM_TOLERANCE_GB, "compared": "the largest GPU found (Apple Silicon: "
+                                                                                "the unified memory)"}},
         "policy": {"output_use": "each engine's output-use terms and training-data claim are published in its EngineSpec "
                                  "and copied into the provenance of every file; an engine's output_warning is copied into "
                                  "every result's warnings",
@@ -260,6 +277,10 @@ def contract() -> Dict[str, Any]:
                               "ffmpeg-skill only, measure the result from its samples, and refuse a result that fails "
                               "its measurement (a loop's wrap, a stinger's peak time and length); the only audio written "
                               "by this skill itself is digital silence used as stinger padding (ADR-011)",
+                   "models": "an engine's models each carry their own weights licence, output-use statement and "
+                             "training-data claim as their model card states them; the model that ran fills "
+                             "engine.model / weights_license / output_use / training_data in the result and the provenance, "
+                             "so a non-default model never inherits the default's statement (ADR-016)",
                    "confirmation": "an engine whose spec names a confirmation_flag (EzAudio: "
                                    f"{ezaudio.ACK_FLAG}) is refused with CONFIRMATION_REQUIRED before any work unless "
                                    "the caller passes that flag; an orchestrator surfaces it as a CONFIRM step, tells the "
@@ -267,6 +288,7 @@ def contract() -> Dict[str, Any]:
                                    "the acknowledgement and its time go into provenance.confirmation (ADR-007)"},
         "provenance": {"fields": ["skill", "op", *[f"engine.{f}" for f in ENGINE_FIELDS], "prompt.text", "prompt.sha256", "seed",
                                   "duration.requested", "duration.measured", "duration.tolerance", "output.sha256", "parameters",
+                                  "parameters.model (BGM: id, selected_by, repository, weights_license, output_use, vram)",
                                   "ffmpeg_skill.version", "confirmation.acknowledged", "confirmation.acknowledged_at",
                                   "confirmation.flag", "network"],
                        "library_fields": ["skill", "op", "engine (null)", "ai_generated (false)", "source.file",

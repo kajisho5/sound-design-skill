@@ -5,7 +5,7 @@ and ROCm is only noticed (`rocm-smi` on PATH), not measured. What torch would ac
 environment is not checked here; ACE-Step does its own GPU detection when it starts.
 
 The tier is ACE-Step 1.5's own recommendation table (README, "Your GPU VRAM"), so the agent can choose a model
-before anything is loaded."""
+before anything is loaded. vram_fit compares the measured memory with a model's requirement (ADR-016)."""
 from __future__ import annotations
 
 import os
@@ -16,6 +16,13 @@ from typing import Any, Dict, List, Optional
 from .procs import TIMEOUT_EXIT, run_process_group
 
 NVIDIA_QUERY = ["--query-gpu=index,name,memory.total,memory.free,driver_version", "--format=csv,noheader,nounits"]
+# GPUs report slightly less than their nominal size (driver and system reservations); ACE-Step's gpu_config allows
+# 0.5 GB for this (VRAM_16GB_TOLERANCE_GB at ca1e85fe), and a model requirement here is compared with the same margin
+VRAM_TOLERANCE_GB = 0.5
+# vram_fit statuses: OK, INSUFFICIENT (measured, too little), NO_GPU (CPU only), UNKNOWN (a GPU whose memory was not
+# measured), NOT_CHECKED (no requirement, or no device document). A model with vram_check "refuse" is refused on these:
+FIT_STATUSES = ("OK", "INSUFFICIENT", "NO_GPU", "UNKNOWN", "NOT_CHECKED")
+REFUSED_FITS = ("INSUFFICIENT", "NO_GPU")
 # (upper bound in GB, recommendation) from the ACE-Step 1.5 README table; checked 2026-10-31 (ADR-001)
 ACESTEP_TIERS = (
     (6.0, "<= 6 GB: 2B turbo DiT only, no LM (INT8 quantization + CPU offload)"),
@@ -49,6 +56,28 @@ def acestep_tier(vram_gb: Optional[float]) -> Optional[str]:
         if vram_gb <= upper:
             return text
     return None  # pragma: no cover - the last tier is unbounded
+
+
+def vram_fit(required_gb: Optional[float], doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """`doc` (a detect() document) against a model's GPU memory requirement in GB (GiB, as ACE-Step counts it). Pure.
+    The largest GPU found is the one compared; on Apple Silicon it is the unified memory, which the CPU shares."""
+    out: Dict[str, Any] = {"status": "NOT_CHECKED", "required_gb": required_gb, "tolerance_gb": VRAM_TOLERANCE_GB,
+                           "accelerator": None, "vram_total_mb": None, "detail": "not checked"}
+    if required_gb is None or doc is None:
+        return out
+    mb = doc.get("vram_total_mb")
+    out.update(accelerator=doc.get("accelerator"), vram_total_mb=mb)
+    if doc.get("status") == "CPU_ONLY":
+        out.update(status="NO_GPU", detail=f"no GPU found ({doc.get('detected_by') or 'CPU only'})")
+    elif mb is None:
+        out.update(status="UNKNOWN", detail=f"GPU memory not measured ({doc.get('detail') or doc.get('accelerator')})")
+    else:
+        have = mb / 1024.0
+        ok = have + VRAM_TOLERANCE_GB >= required_gb
+        what = "unified memory, shared with the CPU" if doc.get("unified_memory") else "GPU memory"
+        out.update(status="OK" if ok else "INSUFFICIENT",
+                   detail=f"{mb} MiB ({have:.1f} GB) of {what}, {'meets' if ok else 'below'} the {required_gb:g} GB required")
+    return out
 
 
 def _nvidia(timeout: float) -> Optional[Dict[str, Any]]:

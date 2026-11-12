@@ -9,7 +9,10 @@ validated through ffmpeg-skill, then one rename):
                 given, is a readable UTF-8 file of < 4096 characters; --timeout > 0
   2. output     a .wav that is not a directory, does not exist (unless --overwrite), is not the lyrics file, and whose
                 directory exists
-  3. engine     the selected engine does BGM and reports OK (else ENGINE_UNAVAILABLE / MODEL_NOT_FOUND)
+  3. engine     the selected engine does BGM and reports OK (else ENGINE_UNAVAILABLE / MODEL_NOT_FOUND); the selected
+                model (--model, ADR-016; the engine's default when omitted) has its files on disk (else
+                MODEL_NOT_FOUND with its download line) and, for a model that needs it (XL), the GPU memory it
+                requires (else INSUFFICIENT_VRAM, naming the default model to fall back to)
   4. ffmpeg     ffmpeg-skill is located and declares probe
   5. seed       an omitted seed is drawn here, so the engine always runs with a fixed seed and the provenance records
                 the seed that was used
@@ -40,10 +43,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import SKILL_ID, __version__
-from .engines import DEFAULT_ENGINE, confirmation_for, engines_for, get_engine
+from .engines import DEFAULT_ENGINE, ENGINES, confirmation_for, engines_for, get_engine
 from .engines import ezaudio
 from .engines.acestep import DEVICES, MAX_CAPTION, MAX_LYRICS
-from .engines.base import OK, Engine, EngineRequest
+from .device import detect
+from .engines.base import OK, Engine, EngineRequest, ModelSpec, model_readiness
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill, SkillInfo
 from .provenance import build_provenance, sha256_text
@@ -76,6 +80,7 @@ class BgmRequest:
     offline: bool = False
     bpm: Optional[int] = None              # step 8 (ADR-012): the tempo, the length rounded to whole bars, a beat grid
     time_signature: Optional[int] = None   # 2, 3, 4 (default with --bpm) or 6 (6/8)
+    model: Optional[str] = None            # ADR-016: the engine's model (--model); None = its default (acestep-v15-turbo)
 
 
 @dataclass
@@ -140,6 +145,32 @@ def _check_args(req: BgmRequest) -> Tuple[str, Optional[str]]:
             raise SoundDesignError("INVALID_ARGUMENT", f"the lyrics must be non-empty and < {MAX_LYRICS} characters",
                                    {"lyrics": req.lyrics_path, "length": len(lyrics)})
     return caption, lyrics
+
+
+def check_model_arg(op: str, engine_id: Optional[str], model: Optional[str]) -> None:
+    """--model names one of the selected engine's models (ADR-016). Pure: no engine is inspected. An unknown engine is
+    left to select_engine, which reports it."""
+    if model is None:
+        return
+    if not isinstance(model, str) or not model:
+        raise SoundDesignError("INVALID_ARGUMENT", "--model must be a model name", {"model": model})
+    eid = engine_id or DEFAULT_ENGINE.get(op)
+    cls = ENGINES.get(eid) if eid else None
+    if cls is not None:
+        cls.spec.model(model)
+
+
+def require_model(engine: Engine, model_id: Optional[str]) -> Tuple[ModelSpec, Dict[str, Any]]:
+    """Step 3 for the model (ADR-016): its files, then, for a model whose spec refuses on too little memory, the GPU
+    doctor measures (device.detect: nvidia-smi / sysctl, never torch). The default model's memory is never checked
+    here, as before. Returns (spec, readiness record for the provenance)."""
+    model = engine.spec.model(model_id)
+    device = detect() if model.vram_check == "refuse" else None
+    ready = model_readiness(engine, model, device)
+    if ready["refusal"]:
+        r = ready["refusal"]
+        raise SoundDesignError(r["code"], r["message"], r["details"])
+    return model, ready
 
 
 def check_output(output_path: str, overwrite: bool, inputs: Tuple[Optional[str], ...] = ()) -> str:
@@ -270,12 +301,14 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
     handle (located from `req.ffmpeg_skill_dir` when None)."""
     caption, lyrics = _check_args(req)
     bpm, beats_per_bar = T.check_tempo(req.bpm, req.time_signature)
+    check_model_arg("bgm", req.engine, req.model)
     dst = check_output(req.output_path, req.overwrite, (req.lyrics_path,))
     grid_dst = T.grid_path(dst) if bpm is not None else None
     if grid_dst is not None and os.path.lexists(grid_dst) and not req.overwrite:
         raise SoundDesignError("OUTPUT_EXISTS", f"{grid_dst} (the beat grid) exists; pass --overwrite to replace it",
                                {"output": grid_dst})
     engine, report = select_engine("bgm", req.engine, req.offline)
+    model, readiness = require_model(engine, req.model)
     duration = req.duration
     plan = None
     if bpm is not None:
@@ -293,15 +326,21 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
     run_dir = _run_dir(os.path.dirname(dst), req.output_path)
     try:
         wav = os.path.join(run_dir, OUTPUT_NAME)
-        params: Dict[str, Any] = {"device": req.device}
+        params: Dict[str, Any] = {"device": req.device, "model": model.id}
         if plan is not None:
             params.update(bpm=plan["bpm"], timesignature=str(plan["beats_per_bar"]))
         result, facts = _run_validated(engine, EngineRequest(op="bgm", prompt=caption, duration=duration, output_path=wav,
                                                              seed=seed, lyrics=lyrics, params=params),
                                        float(req.timeout), run_dir, skill)
         measured = float(facts.get("duration") or 0.0)
-        engine_doc = dict(report, version=result.engine_version, model=result.model)
+        if result.model != model.id:
+            raise SoundDesignError("INVALID_RESULT", f"engine {engine.id!r} ran model {result.model!r}, not {model.id!r}",
+                                   {"engine": engine.id, "model": model.id, "used_model": result.model})
+        # the model that ran, with its own licence and output-use statement (ADR-016); the default's equal the spec's
+        engine_doc = dict(report, version=result.engine_version, model=result.model, weights_license=model.weights_license,
+                          output_use=model.output_use, training_data=model.training_data)
         parameters = {"tags": [t.strip() for t in req.tags if t.strip()], "prompt_given": caption_from(req.prompt, []) or None,
+                      "model": model_record(model, req.model, readiness),
                       "seed_source": seed_source, "instrumental": lyrics is None,
                       "lyrics_sha256": None if lyrics is None else sha256_text(lyrics),
                       "device": result.extra.get("device"), "requested_device": req.device, "lm": result.extra.get("lm"),
@@ -334,7 +373,7 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
         "skill": {"id": SKILL_ID, "version": __version__},
         "output": {"path": dst, "format": "wav", "codec": a.get("codec"), "sample_rate": a.get("sample_rate"),
                    "channels": a.get("channels"), "duration": measured, "sha256": provenance["output"]["sha256"]},
-        "request": {"prompt": caption, "duration": duration, "seed": seed, "seed_source": seed_source,
+        "request": {"prompt": caption, "duration": duration, "seed": seed, "seed_source": seed_source, "model": model.id,
                     **({} if plan is None else {"requested_duration": plan["requested_duration"], "bpm": plan["bpm"],
                                                 "time_signature": plan["time_signature"]})},
         "tempo_map": None if grid is None else dict(grid, path=grid_dst),
@@ -345,8 +384,27 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
         "provenance": provenance,
         "handoff": {"to": "audio-production-skill MIX", "path": dst, "beat_grid": grid_dst,
                     "note": "placed under the programme there; nothing is mixed here"},
-        "warnings": [] if plan is None else _tempo_warnings(plan),
+        "warnings": _model_warnings(model, readiness) + ([] if plan is None else _tempo_warnings(plan)),
     }
+
+
+def model_record(model: ModelSpec, requested: Optional[str], readiness: Dict[str, Any]) -> Dict[str, Any]:
+    """provenance.parameters.model (ADR-016): which model ran, whether it was asked for, where its weights come from,
+    its licence and output-use statement, and the memory check made before it ran (null for the default model)."""
+    vram = readiness.get("vram") or {}
+    return {"id": model.id, "selected_by": "request" if requested is not None else "default", "default": model.default,
+            "parameters": model.parameters, "repository": model.repository, "revision": model.revision,
+            "weights_license": model.weights_license, "output_use": model.output_use,
+            "licence_checked": model.licence_checked, "min_vram_gb": model.min_vram_gb, "vram_check": model.vram_check,
+            "vram": None if vram.get("status") in (None, "NOT_CHECKED") else dict(vram)}
+
+
+def _model_warnings(model: ModelSpec, readiness: Dict[str, Any]) -> List[str]:
+    vram = readiness.get("vram") or {}
+    if model.vram_check == "refuse" and vram.get("status") == "UNKNOWN":
+        return [f"{model.id} needs a GPU with >= {model.min_vram_gb:g} GB ({model.vram_note}); this machine's GPU memory "
+                f"was not measured ({vram.get('detail')}), so it was not checked"]
+    return []
 
 
 def _tempo_warnings(plan: Dict[str, Any]) -> List[str]:

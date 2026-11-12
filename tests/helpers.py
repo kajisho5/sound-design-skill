@@ -14,17 +14,20 @@ import sys
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Sequence, Tuple
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from sound_design_skill import cli  # noqa: E402
-from sound_design_skill.engines.acestep import REQUIRED_FILES  # noqa: E402
+from sound_design_skill import cli, device  # noqa: E402
+from sound_design_skill.engines.acestep import REQUIRED_FILES, XL_FILES  # noqa: E402
 from sound_design_skill.engines import ezaudio  # noqa: E402
 
 # what `acestep-download` leaves in a checkpoints directory, as far as this skill and ACE-Step's own
 # check_main_model_exists look: the required files plus the 1.7B LM that ACE-Step insists on (never loaded here)
 CHECKPOINT_FILES = REQUIRED_FILES + ("acestep-5Hz-lm-1.7B/model.safetensors",)
+# what `acestep-download --model acestep-v15-xl-turbo` adds to it (ADR-016): the files the XL repository lists
+XL_CHECKPOINT_FILES = XL_FILES
 
 
 def _dir_from_env(key: str, sibling: str, marker: str) -> Optional[Path]:
@@ -68,6 +71,28 @@ def no_engines_env(cache: str) -> Dict[str, Optional[str]]:
     return {"SOUND_DESIGN_ACESTEP_PYTHON": None, "SOUND_DESIGN_ACESTEP_CHECKPOINTS": None,
             "SOUND_DESIGN_EZAUDIO_DIR": None, "SOUND_DESIGN_EZAUDIO_PYTHON": None,
             "HF_HUB_CACHE": cache, "HF_HOME": cache, "XDG_CACHE_HOME": cache}
+
+
+@contextmanager
+def gpu(mb=None, *, cpu_only=False, unknown=False, apple_mb=None):
+    """device.detect() sees one NVIDIA GPU of `mb` MiB, Apple Silicon with `apple_mb` MiB, no GPU, or an nvidia-smi
+    that answers with no rows (memory not measured)."""
+    if apple_mb is not None:
+        with mock.patch.object(device.shutil, "which", lambda n: "/usr/sbin/sysctl" if n == "sysctl" else None), \
+                mock.patch.object(device.platform, "system", return_value="Darwin"), \
+                mock.patch.object(device.platform, "machine", return_value="arm64"), \
+                mock.patch.object(device, "run_process_group", return_value=(0, str(apple_mb * 1024 ** 2), "")):
+            yield
+        return
+    if cpu_only:
+        with mock.patch.object(device.shutil, "which", lambda n: None), \
+                mock.patch.object(device.platform, "system", return_value="Linux"):
+            yield
+        return
+    answer = (9, "", "NVIDIA-SMI has failed") if unknown else (0, f"0, NVIDIA RTX Test, {mb}, {mb - 500}, 550.54.15\n", "")
+    with mock.patch.object(device.shutil, "which", lambda n: "/usr/bin/nvidia-smi" if n == "nvidia-smi" else None), \
+            mock.patch.object(device, "run_process_group", return_value=answer):
+        yield
 
 
 def fake_checkpoints(root: str, files: Sequence[str] = CHECKPOINT_FILES) -> str:
@@ -160,6 +185,21 @@ def ensure_main_model(checkpoints_dir=None, prefer_source=None):
     if check_main_model_exists(checkpoints_dir):
         return True, "present"
     return _smart_download("ACE-Step/Ace-Step1.5", Path(checkpoints_dir), prefer_source=prefer_source)
+SUBMODEL_REGISTRY = {"acestep-v15-xl-turbo": "ACE-Step/acestep-v15-xl-turbo"}
+def download_submodel(model_name, checkpoints_dir=None, force=False, token=None, prefer_source=None):
+    if model_name not in SUBMODEL_REGISTRY:
+        return False, "Unknown model " + model_name
+    d = Path(checkpoints_dir) if checkpoints_dir is not None else get_checkpoints_dir()
+    if not force and (d / model_name).exists():
+        return True, "already exists"
+    return _smart_download(SUBMODEL_REGISTRY[model_name], d / model_name, token, prefer_source)
+def ensure_dit_model(model_name, checkpoints_dir=None, token=None, prefer_source=None, force=False):
+    d = Path(checkpoints_dir) if checkpoints_dir is not None else get_checkpoints_dir()
+    if not force and check_model_exists(model_name, d):
+        return True, "present"
+    if model_name == "acestep-v15-turbo":
+        return ensure_main_model(d, prefer_source)
+    return download_submodel(model_name, d, force=force, token=token, prefer_source=prefer_source)
 ''',
     "handler.py": '''import os, time
 from pathlib import Path
@@ -187,6 +227,12 @@ class AceStepHandler:
             ok, msg = model_downloader._smart_download("ACE-Step/Ace-Step1.5", Path(ckpt), prefer_source=prefer_source)
             if not ok:
                 return f"ERROR: Failed to download main model: {msg}", False
+        # as upstream _ensure_models_present: a DiT outside the main repository (XL) comes from SUBMODEL_REGISTRY
+        if cfg.get("mode") == "force_dit_download" or not model_downloader.check_model_exists(config_path, Path(ckpt)):
+            ok, msg = model_downloader.ensure_dit_model(config_path, Path(ckpt), prefer_source=prefer_source,
+                                                        force=cfg.get("mode") == "force_dit_download")
+            if not ok:
+                return f"ERROR: Failed to download DiT model {config_path}: {msg}", False
         if cfg.get("mode") == "init_fail":
             return "Error initializing model: CUDA out of memory\\n\\nTraceback: ...", False
         if cfg.get("mode") == "sleep":
@@ -281,7 +327,7 @@ def fake_acestep_engine(root: str, version: str = "1.5.0", **cfg: Any) -> Iterat
     """`ace-step` metadata plus a working fake `acestep` package (FAKE_ACESTEP) in `root`, on sys.path and PYTHONPATH,
     so the worker subprocess runs it as it would run ACE-Step. Yields {"site", "config", "log", "calls"()}; change the
     behaviour with set_mode(mode) or keyword arguments (mode="ok" | "short" | "fail" | "wrong_seed" | "init_fail" |
-    "force_download" | "sleep")."""
+    "force_download" | "force_dit_download" | "sleep")."""
     site = Path(root) / "site"
     pkg = site / "acestep"
     pkg.mkdir(parents=True, exist_ok=True)

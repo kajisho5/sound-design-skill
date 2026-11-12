@@ -7,7 +7,9 @@ status: ok (ffmpeg-skill usable, every engine OK) | degraded (an engine MISSING 
 ffmpeg-skill not usable). The device never fails doctor: ACE-Step documents CPU support, so a CPU-only machine is a
 warning. Each op reports whether it is implemented and whether its engine is ready: BGM on ACE-Step 1.5 (ADR-004),
 SFX on EzAudio (ADR-005, ADR-006), library mode with no engine (ADR-008), and whether its engine needs the user's
-confirmation flag first (EzAudio does, ADR-007)."""
+confirmation flag first (EzAudio does, ADR-007). BGM also lists every selectable model (ADR-016) with its files, the GPU
+memory it requires against what was measured, whether it is ready and how to get it; a model other than the default
+being absent is not a problem (it is opt-in), but one on disk that this GPU cannot run is a warning."""
 from __future__ import annotations
 
 import platform
@@ -17,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from . import SKILL_ID, __version__
 from .device import detect
 from .engines import DEFAULT_ENGINE, confirmation_for, engine_ids, engines_for, get_engine
-from .engines.base import OK
+from .engines.base import OK, model_readiness
 from .errors import SoundDesignError
 from .ffmpeg_skill import FfmpegSkill
 from . import stock
@@ -37,6 +39,21 @@ NO_ENGINE_NOTE = {"library": "no engine (never ACE-Step or EzAudio): the user's 
 
 def engines_report(offline: bool = False) -> Dict[str, Any]:
     return {eid: get_engine(eid).report(offline=offline) for eid in engine_ids()}
+
+
+def models_report(op: str, engines: Dict[str, Any], device: Dict[str, Any]) -> Dict[str, Any]:
+    """checks.operations.<op>.models (ADR-016): readiness of each model of the op's default engine, keyed by model id."""
+    eid = DEFAULT_ENGINE.get(op)
+    if not eid:
+        return {}
+    engine = get_engine(eid)
+    out = {}
+    for m in engine.spec.models:
+        r = model_readiness(engine, m, device, engines[eid]["status"])
+        r["flag"] = None if m.default else f"--model {m.id}"
+        r["refusal"] = None if r["refusal"] is None else {k: r["refusal"][k] for k in ("code", "message")}
+        out[m.id] = r
+    return out
 
 
 def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dict[str, Any]:
@@ -93,6 +110,15 @@ def doctor(ffmpeg_skill_dir: Optional[str] = None, offline: bool = False) -> Dic
                    "confirmation_required": confirmation_for(op) is not None, "confirmation": confirmation_for(op)}
         if op in NO_ENGINE_NOTE:
             ops[op]["note"] = NO_ENGINE_NOTE[op]
+        if eid and get_engine(eid).spec.models:
+            ops[op]["default_model"] = get_engine(eid).spec.default_model
+            ops[op]["models"] = models_report(op, engines, device)
+            for mid, m in ops[op]["models"].items():
+                if (not m["default"] and m["status"] == OK and m["refusal"]
+                        and m["refusal"]["code"] == "INSUFFICIENT_VRAM"):
+                    warnings.append(f"model {mid}: on disk, but {op} with {m['flag']} will be refused: {m['vram']['detail']}")
+                elif not m["default"] and m["status"] == OK and m["vram"]["status"] == "UNKNOWN":
+                    warnings.append(f"model {mid}: needs >= {m['min_vram_gb']:g} GB GPU memory; {m['vram']['detail']}")
     checks["operations"] = ops
     checks["stock_sources"] = stock.report()       # step 10 (ADR-014): reported only; never called, never a problem
     missing_engines = sorted(eid for eid, e in engines.items() if e["status"] != OK)

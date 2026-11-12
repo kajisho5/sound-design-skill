@@ -7,6 +7,10 @@ says about commercial use of the output and about the training data, credit and 
 and memory it needs, how it is isolated). The spec is what the contract publishes and what goes into the provenance
 of every generated file.
 
+An engine may offer more than one model (ModelSpec, ADR-016): each carries its own licence and output-use statement as
+its model card states them, the files it needs on disk and the GPU memory this skill requires before running it. The
+spec's own licence fields describe the default model, so an engine whose caller never picks a model is unchanged.
+
 Statuses (doctor vocabulary): OK (installed and usable), MISSING (not installed, or its weights are absent),
 INCOMPATIBLE (installed, but a version outside the supported range). An engine never downloads anything."""
 from __future__ import annotations
@@ -14,12 +18,55 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
+from ..device import REFUSED_FITS, vram_fit
 from ..errors import SoundDesignError
 
 OK, MISSING, INCOMPATIBLE = "OK", "MISSING", "INCOMPATIBLE"
 STATUSES = (OK, MISSING, INCOMPATIBLE)
 OPS = ("bgm", "sfx")
 KINDS = ("python",)
+VRAM_CHECKS = ("warn", "refuse")      # what a model's GPU memory requirement does when it is not met (ADR-016)
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """One selectable model of an engine (ADR-016): static, publishable facts, as checked on `licence_checked`."""
+    id: str                                   # the engine's own name for it (ACE-Step: the checkpoint directory / config_path)
+    description: str
+    parameters: str                           # model size as its card states it, e.g. "4B DiT"
+    repository: str                           # where the user downloads its weights (a Hugging Face repository id)
+    revision: Optional[str]                   # the repository commit the facts were read at; None = not pinned
+    weights_license: str
+    output_use: str                           # what its model card says about using the generated audio
+    training_data: str                        # what its model card says it was trained on (a claim, not a check)
+    min_vram_gb: Optional[float]              # GPU memory this skill requires before running it, as it runs it
+    vram_check: str                           # "warn": doctor warns below min_vram_gb; "refuse": INSUFFICIENT_VRAM below it
+    vram_note: str                            # why min_vram_gb is what it is, in a few words (quoted in the refusal)
+    vram_documented: Tuple[str, ...]          # the requirement as the engine documents it, row by row
+    download_gb: Optional[float]              # what the user downloads for it, in GB (10**9 bytes)
+    required_files: Tuple[str, ...]           # relative to the engine's checkpoints directory
+    install: str
+    default: bool = False
+    licence_checked: str = "2026-10-31 (docs/decisions.md ADR-001)"
+    sources: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.vram_check not in VRAM_CHECKS:
+            raise ValueError(f"model {self.id}: vram_check must be one of {VRAM_CHECKS}")
+        if self.vram_check == "refuse" and self.min_vram_gb is None:
+            raise ValueError(f"model {self.id}: a refusing memory check needs min_vram_gb")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return _lists(asdict(self))
+
+
+def _lists(value: Any) -> Any:
+    """Tuples become lists all the way down, so a spec reads the same as the JSON it is published as."""
+    if isinstance(value, dict):
+        return {k: _lists(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_lists(v) for v in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -56,17 +103,34 @@ class EngineSpec:
     confirmation_flag: Optional[str] = None   # CLI flag the caller must pass before this engine runs (ADR-007); None = none
     confirmation_reason: Optional[str] = None     # why, in English: what the user acknowledges by passing the flag
     confirmation_reason_ja: Optional[str] = None  # the same, in Japanese
+    models: Tuple[ModelSpec, ...] = ()        # selectable models (ADR-016); () = one model, not selectable
 
     @property
     def confirmation_required(self) -> bool:
         return bool(self.confirmation_flag)
 
+    @property
+    def default_model(self) -> Optional[str]:
+        return next((m.id for m in self.models if m.default), None)
+
+    @property
+    def model_ids(self) -> Tuple[str, ...]:
+        return tuple(m.id for m in self.models)
+
+    def model(self, model_id: Optional[str] = None) -> ModelSpec:
+        """The ModelSpec for `model_id` (the default one when None); INVALID_ARGUMENT for a name this engine lacks."""
+        wanted = model_id if model_id is not None else self.default_model
+        for m in self.models:
+            if m.id == wanted:
+                return m
+        raise SoundDesignError("INVALID_ARGUMENT", f"engine {self.id!r} has no model {model_id!r}; --model must be one of "
+                               f"{', '.join(self.model_ids) or '(none: this engine has one model)'}",
+                               {"engine": self.id, "model": model_id, "models": list(self.model_ids)})
+
     def to_dict(self) -> Dict[str, Any]:
-        d = asdict(self)
-        for k, v in d.items():
-            if isinstance(v, tuple):
-                d[k] = list(v)
+        d = _lists(asdict(self))
         d["confirmation_required"] = self.confirmation_required
+        d["default_model"] = self.default_model
         return d
 
 
@@ -145,6 +209,13 @@ class Engine:
             info["install"] = None
         return info
 
+    def model_status(self, model_id: Optional[str] = None) -> Dict[str, Any]:
+        """Whether a model's files are on disk: {"status": OK | MISSING, "missing": [...], "detail", "install"}.
+        Engines with selectable models override this; the others have nothing to check beyond inspect()."""
+        if model_id is not None:
+            self.spec.model(model_id)
+        return {"status": OK, "missing": [], "detail": None, "install": None}
+
     def require(self) -> Dict[str, Any]:
         info = self.inspect()
         if info["status"] != OK:
@@ -175,6 +246,36 @@ class Engine:
         raise SoundDesignError("NOT_IMPLEMENTED", f"engine {self.id!r} is installed, but generation is not implemented yet "
                                f"(roadmap step {self.spec.roadmap_step})", {"engine": self.id, "op": req.op,
                                                                             "roadmap_step": self.spec.roadmap_step})
+
+
+def model_readiness(engine: Engine, model: ModelSpec, device: Optional[Dict[str, Any]],
+                    engine_status: Optional[str] = OK) -> Dict[str, Any]:
+    """Whether `model` can run here (ADR-016), for doctor and for generate-bgm alike: its files (engine.model_status),
+    the GPU memory doctor measured (`device`, a device.detect() document; None = not checked) against the model's
+    requirement, and the engine's own status. `refusal` is the guided error the op raises, or None:
+    MODEL_NOT_FOUND (files missing, with the download line) or INSUFFICIENT_VRAM (a "refuse" model on too small a GPU,
+    or none, with the default model to fall back to)."""
+    files = engine.model_status(model.id)
+    fit = vram_fit(model.min_vram_gb, device)
+    default = engine.spec.default_model
+    refusal: Optional[Dict[str, Any]] = None
+    if files["status"] != OK:
+        refusal = {"code": "MODEL_NOT_FOUND",
+                   "message": f"model {model.id!r} of engine {engine.id!r} is not on disk: {files['detail']}",
+                   "details": {"engine": engine.id, "model": model.id, "missing": list(files.get("missing") or []),
+                               "install": model.install, "download_gb": model.download_gb, "default_model": default}}
+    elif model.vram_check == "refuse" and fit["status"] in REFUSED_FITS:
+        fallback = f"; omit --model to use {default}" if default and default != model.id else ""
+        refusal = {"code": "INSUFFICIENT_VRAM",
+                   "message": f"model {model.id!r} needs a GPU with >= {model.min_vram_gb:g} GB ({model.vram_note}); "
+                              f"here: {fit['detail']}{fallback}",
+                   "details": {"engine": engine.id, "model": model.id, "required_gb": model.min_vram_gb, "vram": fit,
+                               "default_model": default, "fallback": None if not fallback else f"omit --model ({default})"}}
+    return {"model": model.id, "default": model.default, "parameters": model.parameters, "status": files["status"],
+            "detail": files["detail"], "missing": list(files.get("missing") or []), "min_vram_gb": model.min_vram_gb,
+            "vram_check": model.vram_check, "vram": fit, "download_gb": model.download_gb,
+            "install": None if files["status"] == OK else model.install,
+            "ready": engine_status == OK and refusal is None, "refusal": refusal}
 
 
 def missing(detail: str, what: str, **extra: Any) -> Dict[str, Any]:
