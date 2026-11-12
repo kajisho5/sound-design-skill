@@ -39,7 +39,7 @@ Every op takes `--timeout S` and `--ffmpeg-skill DIR`; those that write a file t
 - `loop-bed` and `stinger` run no engine. They take a WAV you already have (a `generate-bgm`, `generate-sfx` or `library-pick` result, or the user's file), edit it through ffmpeg-skill only, and measure the result; its licence and engine stay in the source's own provenance, so pass both on.
 - A loop's end runs into its start with no click: repeat it end to end, with no crossfade. The result reports the loop length it found (`loop.length`, within `--search` of `--duration`), how alike the crossfaded material is (`loop.similarity`; a warning below 0.5) and the measured wrap (`seam`). A whole number of bars loops best.
 - A stinger is exactly `--duration` long and its loudest 10 ms is within 10 ms of `--peak-at` (at least 20 ms from either end), else nothing is written. Tell MIX to start it `--peak-at` seconds before the cut.
-- `seam-check` is this skill's own loop check: click (±1 ms), level and octave-band spectrum of 1 s on each side. qc-skill has no loop seam check yet.
+- `seam-check` is this skill's own loop check: click (±1 ms), level and octave-band spectrum of 1 s on each side. qc-skill (>= 1.3.0) runs the same check independently with `rules.audio.loop_seam = {include_wrap: true, seams: [...], window_sec: 1, max_click_ratio: 3, max_level_diff_db: 1.5, max_band_diff_db: 6}`. Ten repeats of a `loop-bed` result pass it (ADR-017).
 
 ## Sound-effect cue sheets
 

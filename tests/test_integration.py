@@ -13,8 +13,9 @@ import shutil
 import tempfile
 import unittest
 
-from helpers import (FFMPEG_SKILL_DIR, XL_CHECKPOINT_FILES, env, fake_acestep_engine, fake_checkpoints, fake_ezaudio_engine, gpu,
-                     no_engines_env, run_cli, write_bed_wav, write_burst_wav, write_tone_wav)
+from helpers import (FFMPEG_SKILL_DIR, QC_SKILL_DIR, XL_CHECKPOINT_FILES, env, fake_acestep_engine, fake_checkpoints,
+                     fake_ezaudio_engine, gpu, no_engines_env, run_cli, run_qc_loop_seam, write_bed_wav, write_burst_wav,
+                     write_drifting_bed_wav, write_tone_wav)
 
 from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
@@ -346,6 +347,58 @@ class ShapingIntegrationTests(unittest.TestCase):
                 self.assertLessEqual(abs(pcm.peak(measured)["time"] - peak_at), 0.010)
                 self.assertAlmostEqual(float(self.skill.probe(out)["duration"]), duration, delta=0.001)
                 self.assertEqual(doc["provenance"]["engine"], None)
+
+
+@unittest.skipUnless(FFMPEG_SKILL_DIR and QC_SKILL_DIR and HAVE_FFMPEG,
+                     "needs ffmpeg-skill and qc-skill (>= 1.3.0) checkouts and ffmpeg/ffprobe on PATH")
+class QcLoopSeamIntegrationTests(unittest.TestCase):
+    """Roadmap step 7's Done-when (ADR-017): a loop-bed result repeated 10 times passes qc-skill's own loop seam check
+    (its ADR-025 `AudioRule.loop_seam`, run through its CLI) at the wrap and all nine seams; a naive cut fails it."""
+    # qc-skill sets no default limit; these are this skill's seam-check limits (ADR-011), so the two checks agree
+    LIMITS = {"window_sec": 1.0, "max_click_ratio": 3.0, "max_level_diff_db": 1.5, "max_band_diff_db": 6.0}
+    CHECKS = ("audio.loop_seam_click_within_limit", "audio.loop_seam_level_within_limit",
+              "audio.loop_seam_spectrum_within_limit")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        self.skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+
+    def qc(self, wav, period):
+        report = run_qc_loop_seam(QC_SKILL_DIR, wav, [round(period * k, 6) for k in range(1, 10)], self.dir, **self.LIMITS)
+        checks = {c["check_id"]: c["status"] for c in report["checks"]}
+        seams = next(m for m in report["measurements"] if m["id"] == "audio.loop_seams")["value"]["seams"]
+        return report["overall_status"], tuple(checks.get(c) for c in self.CHECKS), seams
+
+    def test_a_loop_bed_repeated_ten_times_passes_qc_skills_loop_seam_check(self):
+        for name, write, duration in (("periodic", write_bed_wav, "8"), ("drifting", write_drifting_bed_wav, "8")):
+            with self.subTest(bed=name):
+                bed = write(os.path.join(self.dir, f"{name}.wav"))
+                loop = os.path.join(self.dir, f"{name}-loop.wav")
+                rc, doc = run_cli("loop-bed", bed, "-o", loop, "--duration", duration, "--search", "1",
+                                  "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")
+                self.assertEqual(rc, 0, doc)
+                length = doc["loop"]["length"]
+                x10 = os.path.join(self.dir, f"{name}-x10.wav")
+                self.skill.join([loop] * 10, x10, 0.0)                                       # end to end, no crossfade
+                self.assertEqual(pcm.read_wav(x10).frames, 10 * doc["loop"]["frames"])
+                status, checks, seams = self.qc(x10, length)
+                self.assertEqual((status, checks), ("PASS", ("PASS",) * 3), seams)
+                self.assertEqual(len(seams), 10)                                             # the wrap and nine seams
+                for s in seams:
+                    self.assertLess(s["click"]["ratio"], 2.0, s)
+                    self.assertLess(s["level"]["diff_db"], 1.5, s)
+
+    def test_a_naive_cut_repeated_ten_times_fails_it_with_a_click(self):
+        bed = write_bed_wav(os.path.join(self.dir, "bed.wav"), seconds=12.0)
+        naive = os.path.join(self.dir, "naive.wav")
+        self.skill.cut(bed, naive, duration=8.005)                                           # ends on a kick's peak
+        n10 = os.path.join(self.dir, "n10.wav")
+        self.skill.join([naive] * 10, n10, 0.0)
+        status, checks, seams = self.qc(n10, 8.005)
+        self.assertEqual((status, checks[0]), ("FAIL", "FAIL"), seams)
+        self.assertTrue(all(s["click"]["ratio"] > 3.0 for s in seams), seams)
 
 
 @unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")

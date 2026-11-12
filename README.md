@@ -17,7 +17,7 @@
 
 Music beds (BGM) and sound effects for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Generated files are handed to [audio-production-skill](https://github.com/kajisho5/audio-production-skill) MIX, which places them in the programme; nothing is mixed here. Probing goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.3.0, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
+**Status: 0.3.1, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
 
 | Op | Capability | Engine | Step |
 |---|---|---|---|
@@ -106,7 +106,7 @@ No engine runs: these take a WAV you already have and edit it through ffmpeg-ski
 
 - **`loop-bed <in.wav> -o loop.wav --duration <s> [--search 1] [--crossfade 0.25]`.** The loop length L is searched within `--search` seconds of `--duration` for the point whose continuation looks most like the source's start (normalised cross-correlation). The loop is `crossfade(source[L, L+x] -> source[0, x]) ++ source[x, L]`, built as two cuts, a crossfaded join and a cut. Its last sample is the source's sample L - 1 and its first is sample L, so the wrap is the source's own continuity. The wrap is measured, and a failing one is refused (`INVALID_RESULT`).
 - **`stinger <in.wav> -o out.wav --duration <s> --peak-at <s> [--type whoosh|hit|rise]`.** The peak is the centre of the loudest 10 ms. The source is cut, given a 5 / 10 ms fade where it was cut short, and padded with digital silence (the only audio the skill writes itself), so the result is exactly `--duration` long with its peak at `--peak-at`. It is re-measured and refused unless the peak is within 10 ms.
-- **`seam-check <file.wav> --period <s> | --seams <t,...>`.** A click (the largest second difference within ±1 ms over the 99th percentile within ±50 ms, limit 3), the level (RMS of 1 s on each side, limit 1.5 dB) and the spectrum (octave bands, limit 6 dB) at every seam. Exit 1 when a seam fails. qc-skill has no loop seam check, so this is the skill's own.
+- **`seam-check <file.wav> --period <s> | --seams <t,...>`.** A click (the largest second difference within ±1 ms over the 99th percentile within ±50 ms, limit 3), the level (RMS of 1 s on each side, limit 1.5 dB) and the spectrum (octave bands, limit 6 dB) at every seam. Exit 1 when a seam fails. The same limits given to qc-skill's own loop seam check (1.3.0, `AudioRule.loop_seam`: `window_sec` 1, `max_click_ratio` 3, `max_level_diff_db` 1.5, `max_band_diff_db` 6) pass ten repeats of a `loop-bed` result ([ADR-017](docs/decisions.md)).
 
 ## Sound-effect cue sheet ([ADR-013](docs/decisions.md))
 

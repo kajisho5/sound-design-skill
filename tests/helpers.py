@@ -39,6 +39,8 @@ def _dir_from_env(key: str, sibling: str, marker: str) -> Optional[Path]:
 
 OS_DIR = _dir_from_env("AI_VIDEO_PRODUCTION_OS_DIR", "AI-video-production-OS", "registry/conformance.py")
 FFMPEG_SKILL_DIR = _dir_from_env("SOUND_DESIGN_FFMPEG_SKILL_DIR", "ffmpeg-skill", "scripts/_contract.py")
+# qc-skill (>= 1.3.0, its ADR-025 loop_seam rule), for roadmap step 7's "passes qc-skill's loop seam check"
+QC_SKILL_DIR = _dir_from_env("SOUND_DESIGN_QC_SKILL_DIR", "qc-skill", "src/qc_skill/measurements/loop_seam.py")
 
 
 def run_cli(*argv: str) -> Tuple[int, Dict[str, Any]]:
@@ -604,6 +606,48 @@ def write_bed_wav(path: str, seconds: float = 20.0, rate: int = 48000, bpm: floa
         v += 0.35 * math.exp(-ph * 25) * math.sin(2 * math.pi * 55 * ph) + pad[i % len(pad)]
         out.append(v)
     return _write_pcm16(path, out, rate, channels)
+
+
+def write_drifting_bed_wav(path: str, seconds: float = 14.0, rate: int = 48000, bpm: float = 112.0, channels: int = 2,
+                           seed: int = 3) -> str:
+    """A stand-in bed that never repeats exactly, closer to generated music than `write_bed_wav`: four chords of two
+    harmonic-rich tones a bar each (frequencies not tied to the bar), a decaying kick on every beat, low-passed noise
+    that is never tiled, and a slow 5 % level drift. A loop of it needs the crossfade, not a period."""
+    import math
+    import random
+    rng = random.Random(seed)
+    beat = 60.0 / bpm
+    chords = ((220.0, 277.18, 329.63), (196.0, 246.94, 293.66), (174.61, 220.0, 261.63), (196.0, 246.94, 311.13))
+    out, lp = [], 0.0
+    for i in range(int(seconds * rate)):
+        t = i / rate
+        ph = t % beat
+        w = rng.random() * 2 - 1
+        lp += 0.05 * (w - lp)
+        v = 0.1 * sum(math.sin(2 * math.pi * f * t) + 0.4 * math.sin(4 * math.pi * f * t)
+                      for f in chords[int(t // (4 * beat)) % 4]) / 3
+        v += 0.35 * math.exp(-ph * 25) * math.sin(2 * math.pi * 55 * ph) + 0.25 * lp + 0.01 * w
+        out.append(v * (1 + 0.05 * math.sin(2 * math.pi * 0.13 * t)))
+    return _write_pcm16(path, out, rate, channels)
+
+
+def run_qc_loop_seam(qc_dir: Path, wav: str, seams: Sequence[float], workspace: str, **limits: float) -> Dict[str, Any]:
+    """qc-skill's own CLI (`qc run`, stdlib only, imported from its checkout) on one WAV with an AudioRule.loop_seam
+    of the wrap and the listed seams; returns its report."""
+    import subprocess
+    req = {"operation": "check", "kind": "audio", "input": wav,
+           "rules": {"audio": {"loop_seam": dict({"include_wrap": True, "seams": list(seams)}, **limits)}}}
+    req_path = os.path.join(workspace, "qc-request.json")
+    with open(req_path, "w", encoding="utf-8") as f:
+        json.dump(req, f)
+    proc = subprocess.run([sys.executable, "-m", "qc_skill.cli", "run", req_path, "--json", "--workspace", workspace,
+                           "--no-cache", "--allowed-input-root", os.path.dirname(os.path.abspath(wav))],
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=dict(os.environ, PYTHONPATH=str(Path(qc_dir) / "src")))
+    doc = json.loads(proc.stdout)
+    if "report" not in doc:
+        raise AssertionError(f"qc run failed ({proc.returncode}): {proc.stdout[-2000:]} {proc.stderr[-2000:]}")
+    return doc["report"]
 
 
 def write_burst_wav(path: str, kind: str, seconds: float, at: float = 0.0, rate: int = 48000, seed: int = 2) -> str:
