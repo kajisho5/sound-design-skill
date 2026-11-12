@@ -668,3 +668,27 @@ The fake ACE-Step gains `SUBMODEL_REGISTRY`, `ensure_dit_model` and `download_su
 - The default model's file list could also require `acestep-v15-turbo/silence_latent.pt`, which the loader needs. It ships in the main repository, so the default's check was left as it was.
 
 **Sources.** [HF ACE-Step/acestep-v15-xl-turbo (model card: ~4B, GPU requirements, commercial use)](https://huggingface.co/ACE-Step/acestep-v15-xl-turbo), [HF API: license mit, commit, files](https://huggingface.co/api/models/ACE-Step/acestep-v15-xl-turbo), [HF API: file sizes](https://huggingface.co/api/models/ACE-Step/acestep-v15-xl-turbo/tree/main), [README at ca1e85fe (XL release note, model zoo, "Which Model Should I Choose?")](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/README.md), [docs/en/GPU_COMPATIBILITY.md at ca1e85fe](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/docs/en/GPU_COMPATIBILITY.md), [docs/en/INFERENCE.md at ca1e85fe (turbo parameter handling)](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/docs/en/INFERENCE.md), [acestep/model_downloader.py at ca1e85fe](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/model_downloader.py), [init_service_orchestrator.py](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/core/generation/handler/init_service_orchestrator.py), [init_service_downloads.py](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/core/generation/handler/init_service_downloads.py), [init_service_loader.py](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/core/generation/handler/init_service_loader.py), [acestep/gpu_config.py at ca1e85fe (MODEL_VRAM, tiers, tolerance)](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/gpu_config.py), [LICENSE (MIT)](https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/LICENSE)
+
+## ADR-017 Roadmap step 7 closed: looped beds checked by qc-skill's own loop seam check
+
+**Context.** Roadmap step 7's Done-when is "a looped bed repeated 10 times passes qc-skill's loop seam check; a stinger's peak is within 10 ms of the stated time". ADR-011 met the stinger half and the loop half against this skill's own `seam-check`, because qc-skill had no loop seam check. qc-skill 1.3.0 (its ADR-025, [qc-skill#33](https://github.com/kajisho5/qc-skill/pull/33)) adds one: an opt-in `AudioRule.loop_seam {include_wrap, seams, window_sec, max_click_ratio, max_level_diff_db, max_band_diff_db}`, measured from decoded samples, with no default limit.
+
+**Decision.**
+- No change to the CLI, the contract or any op. The proof is an integration test that runs qc-skill's own CLI (`qc run`, imported from its checkout; stdlib only) on `loop-bed` output joined end to end ten times by ffmpeg-skill `join`, with `include_wrap: true` and the nine internal seams listed.
+- qc-skill has no default limit, so the test passes this skill's `seam-check` limits (ADR-011): `window_sec` 1.0, `max_click_ratio` 3, `max_level_diff_db` 1.5, `max_band_diff_db` 6. The two checks then ask the same question. A caller can hand the same rule to qc-skill. SKILL.md and the README give it.
+- Two beds: the periodic fixture of ADR-011, and a new `write_drifting_bed_wav`. The new bed never repeats exactly: its noise is not tiled, its chords are not tied to the bar, and its level drifts slowly. Its loop needs the crossfade (similarity 0.75; the search moves the loop point to 8.5725 s). A naive 8.005 s cut repeated ten times must FAIL on the click.
+- CI's integration job also checks out qc-skill main into `vendor/qc-skill` (`SOUND_DESIGN_QC_SKILL_DIR`; locally `../qc-skill` is used when it has the loop-seam module). Nothing may skip there, as before.
+
+**Measured** (qc-skill 1.3.0, ffmpeg-skill 3.6.2, ten repeats, the wrap and nine seams):
+
+| bed | loop length | qc overall | worst click ratio | worst level step | worst band step |
+|---|---|---|---|---|---|
+| periodic fixture | 8.000 s | PASS | 0.98 | 0.03 dB | 0.57 dB |
+| drifting bed | 8.5725 s | PASS | 1.01 | 1.05 dB | 5.36 dB |
+| naive cut | 8.005 s | FAIL (click) | 7.60 | 0.07 dB | 0.37 dB |
+
+The drifting bed's band step is near the 6 dB limit. Its 1 s windows hold different chords on each side of the loop point. The beds are seeded, so the figure is reproducible.
+
+**Status.** Step 7's Done-when is met on fixtures and ticked. Still open, outside this repository's CI: a loop of real ACE-Step / EzAudio output. That needs an engine install (ADR-001), and none is installed here.
+
+**Version** 0.3.1 (patch): tests, CI and docs only.

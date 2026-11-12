@@ -35,7 +35,7 @@ jobs:
 
   integration:
     # Real FFmpeg from apt, plus read-only checkouts of ffmpeg-skill main (the live contract and probe) and
-    # Velisa, the OS (formerly AI-video-production-OS; registry conformance checks). No engine and no weights are installed (ADR-001), so
+    # Velisa, the OS (formerly AI-video-production-OS; registry conformance checks), and qc-skill main (its loop seam check). No engine and no weights are installed (ADR-001), so
     # nothing may skip here. Run against ffmpeg-skill main and the 3.0.0 release pinned by commit (ADR-010).
     name: integration (ffmpeg-skill ${{ matrix.ffmpeg_skill.name }})
     strategy:
@@ -56,6 +56,11 @@ jobs:
         with:
           repository: kajisho5/Velisa
           path: vendor/AI-video-production-OS
+      - uses: actions/checkout@v4
+        with:
+          # qc-skill main (>= 1.3.0): its loop_seam rule checks the looped beds (roadmap step 7, ADR-017)
+          repository: kajisho5/qc-skill
+          path: vendor/qc-skill
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -65,6 +70,7 @@ jobs:
         env:
           SOUND_DESIGN_FFMPEG_SKILL_DIR: ${{ github.workspace }}/vendor/ffmpeg-skill
           AI_VIDEO_PRODUCTION_OS_DIR: ${{ github.workspace }}/vendor/AI-video-production-OS
+          SOUND_DESIGN_QC_SKILL_DIR: ${{ github.workspace }}/vendor/qc-skill
         run: |
           set -o pipefail
           python -m unittest discover -s tests -v 2>&1 | tee test.log

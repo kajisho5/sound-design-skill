@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - unreleased
+
+Roadmap step 7 closed (ADR-017). No CLI, contract or op change.
+
+- A `loop-bed` result repeated ten times now passes qc-skill's own loop seam check, as the Done-when asks. This is qc-skill 1.3.0's `AudioRule.loop_seam`, run through `qc run`, at the wrap and all nine seams. It is given this skill's `seam-check` limits: window 1 s, click 3, level 1.5 dB, band 6 dB. Two beds pass: the periodic fixture and a new drifting bed that never repeats exactly. A naive cut fails on the click. SKILL.md and the README give the rule to hand to qc-skill.
+- CI's integration job checks out qc-skill main (`SOUND_DESIGN_QC_SKILL_DIR`).
+
 ## 0.3.0 - unreleased
 
 GENERATE_BGM model selection (ADR-016). Opt-in; without `--model` a bed is made as before.
