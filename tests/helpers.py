@@ -74,9 +74,14 @@ def no_engines_env(cache: str) -> Dict[str, Optional[str]]:
 
 
 @contextmanager
-def gpu(mb=None, *, cpu_only=False, unknown=False, apple_mb=None):
-    """device.detect() sees one NVIDIA GPU of `mb` MiB, Apple Silicon with `apple_mb` MiB, no GPU, or an nvidia-smi
-    that answers with no rows (memory not measured)."""
+def gpu(mb=None, *, cpu_only=False, unknown=False, apple_mb=None, xpu_smi=False):
+    """device.detect() sees one NVIDIA GPU of `mb` MiB, Apple Silicon with `apple_mb` MiB, no GPU, an nvidia-smi
+    that answers with no rows (memory not measured), or Intel's xpu-smi on PATH (an XPU, not measured)."""
+    if xpu_smi:
+        with mock.patch.object(device.shutil, "which", lambda n: "/usr/bin/xpu-smi" if n == "xpu-smi" else None), \
+                mock.patch.object(device.platform, "system", return_value="Linux"):
+            yield
+        return
     if apple_mb is not None:
         with mock.patch.object(device.shutil, "which", lambda n: "/usr/sbin/sysctl" if n == "sysctl" else None), \
                 mock.patch.object(device.platform, "system", return_value="Darwin"), \

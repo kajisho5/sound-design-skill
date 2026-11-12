@@ -122,10 +122,10 @@ MODELS = (
                          "model card: >= 24 GB for full quality (XL + the 4B LM)",
                          "ACE-Step gpu_config: about 9 GB for the XL DiT weights (bf16)"),
         download_gb=19.95, required_files=XL_FILES,
-        install=(f"cd ~/ACE-Step-1.5 && uv run acestep-download --model {XL_MODEL} (about 20 GB more, into "
-                 f"~/ACE-Step-1.5/checkpoints/{XL_MODEL}; or huggingface-cli download {XL_REPO} --local-dir "
-                 f"~/ACE-Step-1.5/checkpoints/{XL_MODEL}); set {ENV_CHECKPOINTS}=~/ACE-Step-1.5/checkpoints, the "
-                 f"directory that also holds the main model"),
+        install=(f"with {ENV_CHECKPOINTS} set to the checkpoints directory that holds the main model (normally "
+                 f"~/ACE-Step-1.5/checkpoints): cd ~/ACE-Step-1.5 && uv run acestep-download --model {XL_MODEL} --dir "
+                 f"\"${ENV_CHECKPOINTS}\" (about 20 GB more, into ${ENV_CHECKPOINTS}/{XL_MODEL}; or huggingface-cli "
+                 f"download {XL_REPO} --local-dir \"${ENV_CHECKPOINTS}/{XL_MODEL}\")"),
         licence_checked="2026-11-12 (docs/decisions.md ADR-016)",
         sources=(f"https://huggingface.co/{XL_REPO}", f"https://huggingface.co/api/models/{XL_REPO}",
                  "https://github.com/ace-step/ACE-Step-1.5/blob/ca1e85fe9430179831e6bc6be790c332190a3866/acestep/model_downloader.py",
@@ -227,7 +227,7 @@ class AceStepEngine(Engine):
         files = model_files(model, weights)
         if files["status"] != OK:
             raise SoundDesignError("MODEL_NOT_FOUND", f"model {model.id!r} is not on disk: {files['detail']}",
-                                   {"engine": self.id, "model": model.id, "missing": files["missing"], "install": model.install})
+                                   {"engine": self.id, "model": model.id, "missing": files["missing"], "install": files["install"]})
         seed = req.seed if req.seed is not None else random.SystemRandom().randrange(2 ** 32)
         out_dir = os.path.join(os.path.dirname(os.path.abspath(req.output_path)), "acestep-out")
 
@@ -288,9 +288,11 @@ def model_files(model: ModelSpec, weights: Dict[str, Any]) -> Dict[str, Any]:
     """Whether `model`'s files are in the checkpoints directory `weights` names (lookup.weights_dir). ACE-Step reads
     every model from that one directory (`<checkpoints>/<model id>/`), so a model from its own repository has to be
     downloaded into it: a Hugging Face cache snapshot of the main repository never holds it."""
-    if weights.get("dir") is None:
-        return {"status": MISSING, "missing": list(model.required_files), "install": model.install,
-                "detail": f"the main model is not complete in {weights.get('source')}, so {model.id} cannot run"}
+    if weights.get("dir") is None:      # the main model comes first; the model's own files are not looked at yet
+        absent = list(weights.get("missing") or [])
+        return {"status": MISSING, "missing": absent, "install": INSTALL,
+                "detail": f"the main model is not complete in {weights.get('source')} (missing {', '.join(absent)}), so "
+                          f"{model.id} cannot run; its own files were not checked"}
     root = Path(weights["dir"])
     absent = [r for r in model.required_files if not (root / r).is_file()]
     if not absent:

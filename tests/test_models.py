@@ -103,7 +103,17 @@ class VramFitTests(unittest.TestCase):
         self.assertEqual(self.fit(apple_mb=32768)["status"], "OK")
 
     def test_no_gpu_unknown_and_not_checked(self):
-        self.assertEqual(self.fit(cpu_only=True)["status"], "NO_GPU")
+        none = self.fit(cpu_only=True)
+        self.assertEqual(none["status"], "NO_GPU")
+        self.assertIn("--device xpu", none["detail"])                 # an Intel GPU is not detected without xpu-smi
+        with gpu(cpu_only=True):
+            xpu = device.vram_fit(20.0, device.detect(), "xpu")
+        self.assertEqual((xpu["status"], xpu["accelerator"]), ("UNKNOWN", "xpu"))
+        with gpu(xpu_smi=True):
+            d = device.detect()
+        self.assertEqual((d["status"], d["accelerator"], d["vram_total_mb"], d["detected_by"]),
+                         ("UNKNOWN", "xpu", None, "xpu-smi on PATH"))
+        self.assertEqual(device.vram_fit(20.0, d)["status"], "UNKNOWN")
         unknown = self.fit(unknown=True)
         self.assertEqual(unknown["status"], "UNKNOWN")
         self.assertIn("not measured", unknown["detail"])
@@ -152,6 +162,20 @@ class ModelFilesTests(unittest.TestCase):
             xl = get_engine("acestep").model_status(XL)
         self.assertEqual(xl["status"], "MISSING")
         self.assertIn("main model", xl["detail"])
+
+    def test_a_missing_main_model_file_is_named_not_the_xl_files(self):
+        """XL on disk, the main model's VAE gone: the answer is the VAE and the main install line, not a 20 GB XL
+        download."""
+        ckpt = fake_checkpoints(os.path.join(self.dir, "ckpt"), CHECKPOINT_FILES + XL_CHECKPOINT_FILES)
+        os.remove(os.path.join(ckpt, "vae", "diffusion_pytorch_model.safetensors"))
+        with env(**no_engines_env(self.dir)), env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=ckpt):
+            xl = get_engine("acestep").model_status(XL)
+            with gpu(mb=24576):
+                r = doctor(os.path.join(self.dir, "none"))["checks"]["operations"]["bgm"]["models"][XL]
+        self.assertEqual((xl["status"], xl["missing"]), ("MISSING", ["vae/diffusion_pytorch_model.safetensors"]))
+        self.assertEqual(xl["install"], acestep.INSTALL)
+        self.assertIn("not checked", xl["detail"])
+        self.assertEqual((r["missing"], r["install"]), (["vae/diffusion_pytorch_model.safetensors"], acestep.INSTALL))
 
 
 class XlEngineTests(unittest.TestCase):
@@ -304,11 +328,17 @@ class GenerateBgmModelTests(unittest.TestCase):
         self.assert_nothing_ran()
 
     def test_unmeasured_gpu_memory_runs_with_a_warning(self):
-        with gpu(unknown=True):
-            doc = self.bgm(model=XL, seed=2)
-        self.assertEqual(doc["engine"]["model"], XL)
-        self.assertEqual(doc["provenance"]["parameters"]["model"]["vram"]["status"], "UNKNOWN")
-        self.assertTrue(any("not measured" in w and ">= 20 GB" in w for w in doc["warnings"]), doc["warnings"])
+        for gpu_kw, bgm_kw in (({"unknown": True}, {}), ({"xpu_smi": True}, {}),
+                               ({"cpu_only": True}, {"device": "xpu"})):   # an Intel GPU without xpu-smi
+            with self.subTest(gpu_kw, **bgm_kw), gpu(**gpu_kw):
+                doc = self.bgm(model=XL, seed=2, overwrite=True, **bgm_kw)
+            self.assertEqual(doc["engine"]["model"], XL)
+            self.assertEqual(doc["provenance"]["parameters"]["model"]["vram"]["status"], "UNKNOWN")
+            self.assertTrue(any("not measured" in w and ">= 20 GB" in w for w in doc["warnings"]), doc["warnings"])
+        with gpu(cpu_only=True), self.assertRaises(SoundDesignError) as e:
+            self.bgm(model=XL, seed=2, overwrite=True)                      # --device auto: no GPU is no GPU
+        self.assertEqual(e.exception.code, "INSUFFICIENT_VRAM")
+        self.assertIn("--device xpu", e.exception.message)
 
     def test_missing_xl_files_are_model_not_found_with_the_download_line(self):
         for name in XL_CHECKPOINT_FILES:

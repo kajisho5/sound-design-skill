@@ -160,13 +160,15 @@ def check_model_arg(op: str, engine_id: Optional[str], model: Optional[str]) -> 
         cls.spec.model(model)
 
 
-def require_model(engine: Engine, model_id: Optional[str]) -> Tuple[ModelSpec, Dict[str, Any]]:
+def require_model(engine: Engine, model_id: Optional[str],
+                  requested_device: Optional[str] = None) -> Tuple[ModelSpec, Dict[str, Any]]:
     """Step 3 for the model (ADR-016): its files, then, for a model whose spec refuses on too little memory, the GPU
-    doctor measures (device.detect: nvidia-smi / sysctl, never torch). The default model's memory is never checked
-    here, as before. Returns (spec, readiness record for the provenance)."""
+    doctor measures (device.detect: nvidia-smi / sysctl, never torch), with the --device asked for (an Intel XPU is
+    not measured, so --device xpu on a machine where none was found is not refused). The default model's memory is
+    never checked here, as before. Returns (spec, readiness record for the provenance)."""
     model = engine.spec.model(model_id)
     device = detect() if model.vram_check == "refuse" else None
-    ready = model_readiness(engine, model, device)
+    ready = model_readiness(engine, model, device, requested_device=requested_device)
     if ready["refusal"]:
         r = ready["refusal"]
         raise SoundDesignError(r["code"], r["message"], r["details"])
@@ -308,7 +310,7 @@ def generate_bgm(req: BgmRequest, skill: Optional[FfmpegSkill] = None) -> Dict[s
         raise SoundDesignError("OUTPUT_EXISTS", f"{grid_dst} (the beat grid) exists; pass --overwrite to replace it",
                                {"output": grid_dst})
     engine, report = select_engine("bgm", req.engine, req.offline)
-    model, readiness = require_model(engine, req.model)
+    model, readiness = require_model(engine, req.model, req.device)
     duration = req.duration
     plan = None
     if bpm is not None:

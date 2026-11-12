@@ -249,21 +249,23 @@ class Engine:
 
 
 def model_readiness(engine: Engine, model: ModelSpec, device: Optional[Dict[str, Any]],
-                    engine_status: Optional[str] = OK) -> Dict[str, Any]:
+                    engine_status: Optional[str] = OK, requested_device: Optional[str] = None) -> Dict[str, Any]:
     """Whether `model` can run here (ADR-016), for doctor and for generate-bgm alike: its files (engine.model_status),
     the GPU memory doctor measured (`device`, a device.detect() document; None = not checked) against the model's
-    requirement, and the engine's own status. `refusal` is the guided error the op raises, or None:
-    MODEL_NOT_FOUND (files missing, with the download line) or INSUFFICIENT_VRAM (a "refuse" model on too small a GPU,
-    or none, with the default model to fall back to)."""
+    requirement (`requested_device`: the --device asked for, see device.vram_fit), and the engine's own status.
+    `refusal` is the guided error the op raises, or None: MODEL_NOT_FOUND (files missing, with the line that gets
+    them: the model's download, or the main model's when that is what is missing) or INSUFFICIENT_VRAM (a "refuse"
+    model on too small a GPU, or none, with the default model to fall back to)."""
     files = engine.model_status(model.id)
-    fit = vram_fit(model.min_vram_gb, device)
+    fit = vram_fit(model.min_vram_gb, device, requested_device)
     default = engine.spec.default_model
+    install = files.get("install") or model.install
     refusal: Optional[Dict[str, Any]] = None
     if files["status"] != OK:
         refusal = {"code": "MODEL_NOT_FOUND",
                    "message": f"model {model.id!r} of engine {engine.id!r} is not on disk: {files['detail']}",
                    "details": {"engine": engine.id, "model": model.id, "missing": list(files.get("missing") or []),
-                               "install": model.install, "download_gb": model.download_gb, "default_model": default}}
+                               "install": install, "download_gb": model.download_gb, "default_model": default}}
     elif model.vram_check == "refuse" and fit["status"] in REFUSED_FITS:
         fallback = f"; omit --model to use {default}" if default and default != model.id else ""
         refusal = {"code": "INSUFFICIENT_VRAM",
@@ -274,7 +276,7 @@ def model_readiness(engine: Engine, model: ModelSpec, device: Optional[Dict[str,
     return {"model": model.id, "default": model.default, "parameters": model.parameters, "status": files["status"],
             "detail": files["detail"], "missing": list(files.get("missing") or []), "min_vram_gb": model.min_vram_gb,
             "vram_check": model.vram_check, "vram": fit, "download_gb": model.download_gb,
-            "install": None if files["status"] == OK else model.install,
+            "install": None if files["status"] == OK else install,
             "ready": engine_status == OK and refusal is None, "refusal": refusal}
 
 

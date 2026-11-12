@@ -1,7 +1,7 @@
 """Compute device and GPU memory, for doctor (roadmap step 1: "doctor reports device/VRAM"). Never imports torch or
 an engine: NVIDIA GPUs are read with `nvidia-smi --query-gpu` (a fixed list argv, its own process group, a short
 timeout), Apple Silicon is recognised from the platform and its unified memory read with `sysctl -n hw.memsize`,
-and ROCm is only noticed (`rocm-smi` on PATH), not measured. What torch would actually pick inside ACE-Step's own
+and ROCm and Intel XPU are only noticed (`rocm-smi` / `xpu-smi` on PATH), not measured. What torch would actually pick inside ACE-Step's own
 environment is not checked here; ACE-Step does its own GPU detection when it starts.
 
 The tier is ACE-Step 1.5's own recommendation table (README, "Your GPU VRAM"), so the agent can choose a model
@@ -58,17 +58,24 @@ def acestep_tier(vram_gb: Optional[float]) -> Optional[str]:
     return None  # pragma: no cover - the last tier is unbounded
 
 
-def vram_fit(required_gb: Optional[float], doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def vram_fit(required_gb: Optional[float], doc: Optional[Dict[str, Any]],
+             requested_device: Optional[str] = None) -> Dict[str, Any]:
     """`doc` (a detect() document) against a model's GPU memory requirement in GB (GiB, as ACE-Step counts it). Pure.
-    The largest GPU found is the one compared; on Apple Silicon it is the unified memory, which the CPU shares."""
+    The largest GPU found is the one compared; on Apple Silicon it is the unified memory, which the CPU shares.
+    An Intel GPU (XPU) is only noticed through xpu-smi, so "no GPU found" is not proof of none: with
+    `requested_device` "xpu" it counts as not measured (UNKNOWN), and the NO_GPU detail says to pass --device xpu."""
     out: Dict[str, Any] = {"status": "NOT_CHECKED", "required_gb": required_gb, "tolerance_gb": VRAM_TOLERANCE_GB,
                            "accelerator": None, "vram_total_mb": None, "detail": "not checked"}
     if required_gb is None or doc is None:
         return out
     mb = doc.get("vram_total_mb")
     out.update(accelerator=doc.get("accelerator"), vram_total_mb=mb)
-    if doc.get("status") == "CPU_ONLY":
-        out.update(status="NO_GPU", detail=f"no GPU found ({doc.get('detected_by') or 'CPU only'})")
+    if doc.get("status") == "CPU_ONLY" and requested_device == "xpu":
+        out.update(status="UNKNOWN", accelerator="xpu",
+                   detail="--device xpu was asked for, and an Intel GPU's memory is not measured without xpu-smi")
+    elif doc.get("status") == "CPU_ONLY":
+        out.update(status="NO_GPU", detail=f"no GPU found ({doc.get('detected_by') or 'CPU only'}); an Intel GPU (XPU) "
+                                           "is only noticed through xpu-smi: on one, pass --device xpu")
     elif mb is None:
         out.update(status="UNKNOWN", detail=f"GPU memory not measured ({doc.get('detail') or doc.get('accelerator')})")
     else:
@@ -125,8 +132,11 @@ def detect(timeout: float = 10.0) -> Dict[str, Any]:
     elif shutil.which("rocm-smi"):
         doc.update(accelerator="rocm", status="UNKNOWN", detected_by="rocm-smi on PATH",
                    detail="AMD ROCm tools found; VRAM is not read by this skill (ACE-Step documents ROCm support)")
+    elif shutil.which("xpu-smi"):
+        doc.update(accelerator="xpu", status="UNKNOWN", detected_by="xpu-smi on PATH",
+                   detail="Intel GPU (XPU) tools found; VRAM is not read by this skill (ACE-Step documents XPU support)")
     else:
-        doc.update(accelerator="cpu", status="CPU_ONLY", detected_by="no nvidia-smi, not Apple Silicon, no rocm-smi",
+        doc.update(accelerator="cpu", status="CPU_ONLY", detected_by="no nvidia-smi, not Apple Silicon, no rocm-smi, no xpu-smi",
                    detail="no GPU found: ACE-Step documents CPU support, but generation speed on CPU is unverified")
     gb = None if doc["vram_total_mb"] is None else doc["vram_total_mb"] / 1024.0
     doc["acestep_recommendation"] = acestep_tier(gb) if doc["accelerator"] in ("cuda", "mps") else None

@@ -249,11 +249,14 @@ def contract() -> Dict[str, Any]:
         "stock": {"reported_by": "doctor checks.stock_sources", "sources": [x["id"] for x in stock.SOURCES],
                   "statuses": ["MISSING (API key not set)", "KEY_SET", "MANUAL (no API)"], "fetch": stock.FETCH_NOTE},
         "device": {"reported_by": "doctor checks.device", "detected_by": ["nvidia-smi --query-gpu", "platform + sysctl hw.memsize (Apple Silicon)",
-                                                                          "rocm-smi on PATH (noticed, not measured)"],
+                                                                          "rocm-smi on PATH (noticed, not measured)",
+                                                                          "xpu-smi on PATH (Intel XPU; noticed, not measured)"],
                    "statuses": ["OK", "CPU_ONLY", "UNKNOWN"], "acestep_tiers": [t for _, t in ACESTEP_TIERS],
                    "model_fit": {"statuses": list(FIT_STATUSES), "refused": list(REFUSED_FITS),
                                  "tolerance_gb": VRAM_TOLERANCE_GB, "compared": "the largest GPU found (Apple Silicon: "
-                                                                                "the unified memory)"}},
+                                                                                "the unified memory)",
+                                 "xpu": "an Intel GPU is only noticed through xpu-smi; with --device xpu and no GPU "
+                                        "found, the memory counts as not measured (UNKNOWN), not as NO_GPU"}},
         "policy": {"output_use": "each engine's output-use terms and training-data claim are published in its EngineSpec "
                                  "and copied into the provenance of every file; an engine's output_warning is copied into "
                                  "every result's warnings",
