@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-0.3.1: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM; the 4B XL turbo model opt-in with `--model`, >= 20 GB, ADR-016), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, checked by qc-skill's loop seam check, ADR-017), tempo-targeted BGM with a beat grid (step 8, skill-side code complete), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
+0.3.2: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM; the 4B XL turbo model opt-in with `--model`, >= 20 GB, ADR-016), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, checked by qc-skill's loop seam check, ADR-017), tempo-targeted BGM with a beat grid (step 8, skill-side code complete; the grid checked by `scenes --beats`, ADR-018), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
@@ -45,6 +45,7 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
   - Done when: ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms
   - Skill side ([#15](https://github.com/kajisho5/sound-design-skill/pull/15), ADR-012): `generate-bgm --bpm [--time-signature]` passes the tempo to ACE-Step, rounds the length to whole bars and writes `<name>.beats.json`. Open: no real ACE-Step output to measure, and ffmpeg-skill `scenes --beats` refuses audio-only input (on a video wrapper its phase was 40-60 ms off a synthetic click track); proposal to Velisa's ROADMAP
   - Status 2026-11-12: the skill-side code is complete. ffmpeg-skill's changelog says 3.2.2 measures audio-only input with `scenes --beats` and puts a click track's grid within 1 ms (not re-measured here; this skill does not call `scenes`). The step stays open until a real ACE-Step output is measured against its grid (it needs an engine install, ADR-001)
+  - Measurement ([#21](https://github.com/kajisho5/sound-design-skill/pull/21), ADR-018, 0.3.2): ffmpeg-skill `scenes --beats` (3.6.2) on `generate-bgm --bpm` output agrees with the written `<name>.beats.json` within 20 ms. Three cases were run: 120 BPM 4/4 15 s, 90 BPM 3/4 20 s and 137 BPM 4/4 12 s. The worst distance was 1.07 ms, and every beat was found. Measured on the test engine's bed, whose clicks sit on the grid by construction. Still open: the same check on a real ACE-Step bed (no engine installed here, ADR-001)
 - [x] **9. Sound-effect cue sheet** — SFX_CUES: from cut points and emphasis times the caller gives, a cue sheet of library or generated effects (pop, whoosh, ding) with levels and a minimum spacing, for audio-production MIX to place; the skill never decides where the emphasis is
   - なぜ要るか：YouTube 風の効果音を、カットや強調テロップの時刻に揃えて置ける
   - Done when: a fixture with 10 cut times yields a cue sheet whose effects sit at those times and respect the spacing

@@ -301,7 +301,7 @@ def _wav(path, seed, seconds, rate=48000, bpm=None):
             ph = i % beat
             v += int(20000 * math.exp(-ph / (0.01 * rate)) * math.sin(2 * math.pi * 1000.0 * ph / rate))
         data[2 * i] = v
-        data[2 * i + 1] = -v
+        data[2 * i + 1] = v      # in phase: a mono downmix (ffmpeg-skill scenes) must not cancel it
     if sys.byteorder == "big":
         data.byteswap()
     with wave.open(path, "wb") as w:

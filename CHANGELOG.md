@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2 - unreleased
+
+Roadmap step 8, the measurement half (ADR-018). No CLI, contract or op change.
+
+- An integration test runs ffmpeg-skill `scenes --beats` on `generate-bgm --bpm` output and compares it with the written `<name>.beats.json`. The cases are 120 BPM 4/4 for 15 s, 90 BPM 3/4 for 20 s and 137 BPM 4/4 for 12 s. Every written beat has a measured one within 20 ms (measured: at most 1.07 ms), and the measured tempo is the requested one. On ffmpeg-skill before 3.2.2, which refuses a WAV, the refusal is asserted instead.
+- The test engine's stereo was in antiphase (right = -left), so a mono downmix was silent and `scenes` found no beats. It is now in phase.
+- Step 8 stays open: the bed measured is the test engine's, which puts its clicks on the grid. Real ACE-Step output still needs an engine install.
+
 ## 0.3.1 - unreleased
 
 Roadmap step 7 closed (ADR-017). No CLI, contract or op change.
