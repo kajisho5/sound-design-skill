@@ -207,19 +207,25 @@ def anchors(pcm: P.Pcm) -> Dict[str, Any]:
 
 
 def _library_effect(skill: FfmpegSkill, files: Dict[str, str], entries: Dict[str, Dict[str, Any]], effect: str,
-                    character: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+                    character: Tuple[str, ...] = (), probed: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """library-pick's deterministic ranking of the kind sfx files tagged `effect` (declared licence, readable) whose
-    tags or mood carry every `character` word. The first row is library-pick's choice."""
+    tags or mood carry every `character` word. The first row is library-pick's choice. `probed` caches each file's
+    probe facts and SHA-256 by path (None: not readable as audio), so a file several selectors share is probed once."""
+    probed = {} if probed is None else probed
     rows, _ = screen(files, entries, "sfx", [effect], [])
     if character:
         rows = [r for r in rows if set(match(r["entry"], list(character), list(character))) == set(character)]
     measured = []
     for r in rows:
-        try:
-            r["measured"] = measure(skill, r["path"])
-        except SoundDesignError:
+        if r["path"] not in probed:
+            try:
+                probed[r["path"]] = (measure(skill, r["path"]), sha256_file(r["path"]))
+            except SoundDesignError:
+                probed[r["path"]] = None
+        if probed[r["path"]] is None:
             continue
-        r["duration"], r["sha256"] = r["measured"]["duration"], sha256_file(r["path"])
+        r["measured"], r["sha256"] = probed[r["path"]]
+        r["duration"] = r["measured"]["duration"]
         measured.append(r)
     ranked, _ = rank(measured, None)
     return ranked
@@ -240,7 +246,8 @@ class _Sources:
         self.skill, self.library, self.files, self.run_dir = skill, library, files, run_dir
         self.lib_files, self.entries = (scan(library), load_manifest(library)[0]) if library else ({}, {})
         self.ranked: Dict[Selector, List[Dict[str, Any]]] = {}
-        self.measured: Dict[str, Dict[str, Any]] = {}
+        self.probed: Dict[str, Any] = {}               # path -> (probe facts, SHA-256), or None when not audio
+        self.measured: Dict[str, Dict[str, Any]] = {}  # path -> anchors, decoded only for files a cue uses
         self.warnings: List[str] = []
 
     def options(self, sel: Selector) -> List[Dict[str, Any]]:
@@ -260,7 +267,7 @@ class _Sources:
         if self.library is None:
             raise SoundDesignError("INPUT_NOT_FOUND", f"no source for effect(s) {effect}: give --library or --file "
                                    "<name>=<wav>", {"effects": [effect]})
-        rows = _library_effect(self.skill, self.lib_files, self.entries, effect, character)
+        rows = _library_effect(self.skill, self.lib_files, self.entries, effect, character, self.probed)
         if not rows:
             carries = f" and carries {', '.join(character)} in its tags or mood" if character else ""
             raise SoundDesignError("INPUT_NOT_FOUND", f"no library file of kind sfx is tagged {effect!r}{carries} with a "

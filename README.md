@@ -44,7 +44,7 @@ sound-design loop-bed bed.wav -o loop.wav --duration 8 --json          # end run
 sound-design stinger whoosh.wav -o st.wav --duration 1 --peak-at 0.5 --json   # exact length, peak on the cut (±10 ms)
 sound-design seam-check loop-x10.wav --period 8 --json                 # click / level / spectrum at every seam
 sound-design sfx-cues --cuts 1,2.5,4.75 --emphasis 3.2 --library ./sounds -o cues.json --json   # cue sheet for MIX
-sound-design sfx-cues --cuts 1,12,25 --library ./sounds --min-reuse-spacing 30 --character pop=bright --json   # opt-in
+sound-design sfx-cues --cuts 1,12,25 --emphasis 3.2 --library ./sounds --min-reuse-spacing 30 --character pop=bright --json   # opt-in
 ```
 
 For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the user first (EzAudio) and how to report licences; tests keep it in step with the contract ([ADR-009](docs/decisions.md)).

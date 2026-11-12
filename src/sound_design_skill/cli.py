@@ -196,8 +196,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "this many seconds earlier takes the next library file for that effect in rank order, or is "
                          "dropped when there is none (a named --file is never replaced)")
     cu.add_argument("--character", action="append", default=[], type=_pair, metavar="EFFECT=WORD[,WORD]",
-                    help="only library files for EFFECT whose tags or mood carry every WORD (e.g. pop=bright); an "
-                         "event's own \"character\" replaces it")
+                    help="only library files for EFFECT whose tags or mood carry every WORD (e.g. pop=bright; "
+                         "repeated flags for one effect add words); an event's own \"character\" replaces it")
     cu.add_argument("-o", "--output", help="write the cue sheet here too (.json)")
     cu.add_argument("--overwrite", action="store_true", help="allow replacing an existing cue sheet")
     cu.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
@@ -222,6 +222,20 @@ def _time_list(text: str) -> list:
 
 def _tag_list(text: str) -> list:
     return [t.strip() for t in text.split(",") if t.strip()]
+
+
+def _characters(pairs: list) -> dict:
+    """--character EFFECT=WORD[,WORD], repeatable: the words of every flag for one effect are all required. A flag
+    with no word would silently filter nothing, so it is refused."""
+    out: Dict[str, list] = {}
+    for effect, value in pairs:
+        words = _tag_list(value)
+        if not words:
+            raise SoundDesignError("INVALID_ARGUMENT", f"--character {effect}={value}: give at least one word",
+                                   {"character": f"{effect}={value}"})
+        out.setdefault(effect, [])
+        out[effect] += [w for w in words if w not in out[effect]]
+    return out
 
 
 def _emit(doc: Dict[str, Any], as_json: bool) -> None:
@@ -407,7 +421,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                        min_spacing=args.min_spacing, level=args.level, output_path=args.output,
                                        overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
                                        timeout=args.timeout, min_reuse_spacing=args.min_reuse_spacing,
-                                       characters={k: _tag_list(v) for k, v in args.character})), as_json)
+                                       characters=_characters(args.character))), as_json)
             return 0
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)

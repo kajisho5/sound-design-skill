@@ -354,6 +354,15 @@ class ReuseAndCharacterSheetTests(unittest.TestCase):
         self.assertEqual([(c["file"], c["source"]) for c in doc["cues"]],
                          [("pop-a.wav", "pop"), ("pop-bright.wav", "pop[bright]"), ("pop-soft.wav", "pop@3")])
 
+    def test_probes_are_shared_between_pop_selectors(self):
+        doc = self.cues(events_path=self._events([{"time": 1.0, "kind": "emphasis"},
+                                                  {"time": 2.0, "kind": "emphasis", "character": "bright"},
+                                                  {"time": 3.0, "kind": "emphasis", "character": "soft"}]),
+                        min_reuse_spacing=30.0)
+        self.assertEqual([c["file"] for c in doc["cues"]], ["pop-a.wav", "pop-bright.wav", "pop-soft.wav"])
+        probes = [name for op, name in ((c[0], c[1]) for c in self.skill.calls) if op == "probe"]
+        self.assertEqual(sorted(probes), ["pop-a.wav", "pop-bright.wav", "pop-soft.wav"])   # once each, three selectors
+
     def test_reuse_spacing_values_and_the_cli(self):
         for bad in (-1, "30", True, float("nan"), 86400.5):
             with self.subTest(bad=bad), self.assertRaises(SoundDesignError) as e:
@@ -365,7 +374,13 @@ class ReuseAndCharacterSheetTests(unittest.TestCase):
             self.assertEqual((rc, doc["error"]["code"]), (2, "INPUT_NOT_FOUND"))
             rc, doc = run_cli("sfx-cues", "--cuts", "0.5,10,20,30.5", "--emphasis", "3,4", "--library", self.lib,
                               "--min-reuse-spacing", "30", "--character", "pop=Bright", "--json")
-        self.assertEqual(rc, 0, doc)
+            self.assertEqual(rc, 0, doc)
+            rc, empty = run_cli("sfx-cues", "--emphasis", "3", "--library", self.lib, "--character", "pop=,", "--json")
+            self.assertEqual((rc, empty["error"]["code"]), (2, "INVALID_ARGUMENT"))     # no word: refused, not ignored
+            rc, both = run_cli("sfx-cues", "--emphasis", "3", "--library", self.lib, "--character", "pop=short",
+                               "--character", "pop=bright", "--json")
+            self.assertEqual((rc, both["error"]["code"]), (2, "INPUT_NOT_FOUND"))        # words add up: short AND bright
+            self.assertEqual(both["error"]["details"]["character"], ["bright", "short"])
         self.assertEqual([c["file"] for c in doc["cues"]],
                          ["whoosh-a.wav", "pop-bright.wav", "whoosh-b.wav", "whoosh-c.wav", "whoosh-a.wav"])
         self.assertEqual([(d["time"], d["by"]) for d in doc["dropped"]], [(4.0, "min_reuse_spacing")])
