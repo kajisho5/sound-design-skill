@@ -12,6 +12,7 @@ Run `sound-design <command> ... --json` (installed by `pip install -e .`, Python
 | A 60 s music bed | `sound-design generate-bgm --prompt "calm piano bed" --tags "ambient,70 bpm" --duration 60 -o bed.wav --seed 42 --json` (10-600 s) |
 | A 120 BPM bed for a 15 s lyric video, with its beat grid | `sound-design generate-bgm --prompt "upbeat pop" --duration 15 --bpm 120 --time-signature 4 -o pv.wav --json` (becomes 16 s = 8 bars; `pv.beats.json` beside it) |
 | Same, with lyrics / on the CPU | add `--lyrics lyrics.txt` / `--device cpu` (default instrumental, `--device auto`) |
+| A bed from the larger 4B XL model (opt-in, a GPU with >= 20 GB) | `sound-design generate-bgm --prompt "cinematic strings" --duration 60 -o bed.wav --model acestep-v15-xl-turbo --json` (see "Choosing the BGM model") |
 | A sound effect (after the user agreed, see below) | `sound-design generate-sfx --prompt "a wooden door closes" --tags "indoor" --duration 3 -o door.wav --seed 7 --acknowledge-ezaudio-training-data --json` (whole seconds, 1-10) |
 | Add the user's own file to a library | `sound-design library-import track.wav --library ./sounds --licence CC-BY-4.0 --credit "Music: name" --kind bgm --tags piano --mood calm --loopable --json` |
 | Add a downloaded stock track with its licence records | `sound-design library-import track.mp3 --library ./sounds --licence CC-BY-4.0 --title "Morning Light" --author "Aiko Tanaka" --licence-url https://creativecommons.org/licenses/by/4.0/ --licence-file LICENSE.txt --provider Freesound --kind bgm --json` (add `--attribution "<line>"` when the source gives one, `--content-id registered` only when the source says so) |
@@ -72,9 +73,18 @@ EzAudio (`generate-sfx`) was trained on YouTube audio (AudioSet, VGGSound, Audio
 
 | Op | Engine | Install |
 |---|---|---|
-| `generate-bgm` | ACE-Step 1.5 (MIT code and weights), Python 3.11-3.12 in its own checkout and `.venv` | `doctor` prints the exact line; set `SOUND_DESIGN_ACESTEP_PYTHON` (and `SOUND_DESIGN_ACESTEP_CHECKPOINTS`, else the Hugging Face cache) |
+| `generate-bgm` | ACE-Step 1.5 (MIT code and weights; 2B turbo by default, 4B XL turbo with `--model`), Python 3.11-3.12 in its own checkout and `.venv` | `doctor` prints the exact line; set `SOUND_DESIGN_ACESTEP_PYTHON` (and `SOUND_DESIGN_ACESTEP_CHECKPOINTS`, else the Hugging Face cache) |
 | `generate-sfx` | EzAudio-XL (MIT code and weights, Flan-T5-XL Apache-2.0) in its own checkout and `.venv` | `doctor` prints the exact line; set `SOUND_DESIGN_EZAUDIO_PYTHON` and `SOUND_DESIGN_EZAUDIO_DIR` (checkout with `ckpts/`); Flan-T5-XL in the Hugging Face cache |
 | library mode | none | nothing to install beyond ffmpeg-skill |
+
+### Choosing the BGM model
+
+`generate-bgm` runs ACE-Step's 2B turbo model, `acestep-v15-turbo`, unless `--model` says otherwise (request key `model`). It needs less than 4 GB of GPU memory and also runs on the CPU (slowly). `--model acestep-v15-xl-turbo` selects the XL turbo model: a 4B DiT, MIT like the default, with commercial use of the output stated on its own model card. Choose it from `doctor --json`, `checks.operations.bgm.models`, where each model has `ready`, its files, `vram` and `install`:
+
+- **GPU memory.** XL needs a GPU with at least 20 GB, because this skill runs it without CPU offload or quantization. Its model card lists 12 GB (with offload and INT8), 16 GB (with offload), 20 GB (no offload) and 24 GB (with the 4B LM). Below 20 GB, or with no GPU, `generate-bgm --model acestep-v15-xl-turbo` stops before anything runs with `INSUFFICIENT_VRAM` (exit 3). Tell the user, and offer the default model (`error.details.default_model`): drop `--model`. Apple Silicon counts its unified memory, which the CPU shares. When the GPU memory cannot be measured (ROCm, Intel XPU), the bed is made and a warning says it was not checked. An Intel GPU is only noticed through `xpu-smi`; on one without it, pass `--device xpu`.
+- **Download.** About 20 GB more on disk, into the same checkpoints directory as the main model (`SOUND_DESIGN_ACESTEP_CHECKPOINTS`; a Hugging Face cache snapshot does not work for XL). Without it, the call stops with `MODEL_NOT_FOUND` and `error.details.install` gives the line, for example `uv run acestep-download --model acestep-v15-xl-turbo --dir "$SOUND_DESIGN_ACESTEP_CHECKPOINTS"`. If the main model is what is missing, the line is the main model's. Ask the user before downloading.
+- **The record.** The result's `engine.model`, `engine.weights_license` and `engine.output_use`, and `provenance.parameters.model` (`selected_by`, `repository`, `vram`), name the model that ran. Pass them on as you do for the default.
+- **Not measured.** XL has not been run on a real GPU by this skill's tests; the 20 GB figure is its model card's. Say so if the user asks how well it works.
 
 When an op fails with `ENGINE_UNAVAILABLE` or `MODEL_NOT_FOUND`, `error.details.install` holds the line to pass on. Do not download or install an engine without the user's go-ahead: the skill never downloads weights, and its worker refuses every non-loopback connection.
 
@@ -101,6 +111,7 @@ With `--json`, a failure is `{"ok": false, "error": {"code", "message", "retryab
 | `CANCELLED` | 6 | yes | Interrupted by a signal. |
 | `INTERNAL_ERROR` | 7 | no | A bug in this skill; report it. |
 | `CONFIRMATION_REQUIRED` | 8 | no | EzAudio needs the user's acknowledgement first; ask, then add `--acknowledge-ezaudio-training-data`. |
+| `INSUFFICIENT_VRAM` | 3 | no | The `--model` chosen needs more GPU memory than this machine has (XL: 20 GB); drop `--model` to use `details.default_model`. |
 
 ## Not this skill's job
 

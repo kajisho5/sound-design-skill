@@ -13,8 +13,8 @@ import shutil
 import tempfile
 import unittest
 
-from helpers import (FFMPEG_SKILL_DIR, env, fake_acestep_engine, fake_checkpoints, fake_ezaudio_engine, no_engines_env, run_cli,
-                     write_bed_wav, write_burst_wav, write_tone_wav)
+from helpers import (FFMPEG_SKILL_DIR, XL_CHECKPOINT_FILES, env, fake_acestep_engine, fake_checkpoints, fake_ezaudio_engine, gpu,
+                     no_engines_env, run_cli, write_bed_wav, write_burst_wav, write_tone_wav)
 
 from sound_design_skill.doctor import doctor
 from sound_design_skill.errors import SoundDesignError
@@ -65,7 +65,7 @@ class GenerateBgmIntegrationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.dir = self.tmp.name
-        ckpt = fake_checkpoints(os.path.join(self.dir, "ckpt"))
+        self.ckpt = ckpt = fake_checkpoints(os.path.join(self.dir, "ckpt"))
         for cm in (env(**no_engines_env(self.dir)), env(SOUND_DESIGN_ACESTEP_CHECKPOINTS=ckpt)):
             cm.__enter__()
             self.addCleanup(cm.__exit__, None, None, None)
@@ -105,6 +105,31 @@ class GenerateBgmIntegrationTests(unittest.TestCase):
             grid = json.load(fh)
         self.assertEqual((grid["bpm"], grid["bars"], len(grid["beats"]), grid["bar_lines"][-1]), (120, 8, 32, 16.0))
         self.assertEqual((grid["measured"], grid["audio"]["sha256"]), (False, doc["output"]["sha256"]))
+
+    def test_the_xl_model_through_the_same_api_and_its_refusals(self):
+        """ADR-016: --model acestep-v15-xl-turbo reaches ACE-Step as config_path; too small a GPU and missing files are
+        refused before the worker starts."""
+        model = ["--model", "acestep-v15-xl-turbo"]
+        with gpu(mb=24576):
+            out, (rc, doc) = self.cli("xl-missing.wav", "--seed", "3", *model)
+        self.assertEqual((rc, doc["error"]["code"]), (3, "MODEL_NOT_FOUND"))
+        self.assertIn("acestep-download --model acestep-v15-xl-turbo", doc["error"]["details"]["install"])
+        fake_checkpoints(self.ckpt, XL_CHECKPOINT_FILES)
+        with gpu(mb=12288):
+            out, (rc, doc) = self.cli("xl-small.wav", "--seed", "3", *model)
+        self.assertEqual((rc, doc["error"]["code"], doc["error"]["details"]["default_model"]),
+                         (3, "INSUFFICIENT_VRAM", "acestep-v15-turbo"))
+        self.assertEqual(self.fake["calls"](), [])
+        with gpu(mb=24576):
+            out, (rc, doc) = self.cli("xl.wav", "--seed", "3", *model)
+        self.assertEqual(rc, 0, doc)
+        self.assertAlmostEqual(float(FfmpegSkill.locate(str(FFMPEG_SKILL_DIR)).probe(out)["duration"]), 10.5, delta=0.1)
+        self.assertEqual([c["config_path"] for c in self.fake["calls"]() if c["event"] == "initialize_service"],
+                         ["acestep-v15-xl-turbo"])
+        self.assertEqual((doc["engine"]["model"], doc["provenance"]["parameters"]["model"]["selected_by"]),
+                         ("acestep-v15-xl-turbo", "request"))
+        self.assertIn("acestep-v15-xl-turbo model card", doc["provenance"]["engine"]["weights_license"])
+        self.assertEqual(sorted(n for n in os.listdir(self.dir) if n.endswith(".wav")), ["xl.wav"])
 
     def test_a_bed_of_the_wrong_length_is_refused_by_the_real_probe(self):
         self.fake["set_mode"]("short")

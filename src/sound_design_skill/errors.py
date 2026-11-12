@@ -24,6 +24,7 @@ ERROR_TABLE: Dict[str, Tuple[int, bool]] = {
     "INTERNAL_ERROR": (7, False),            # a bug in this skill
     "CONFIRMATION_REQUIRED": (8, False),     # the engine needs the user's explicit acknowledgement flag first (ADR-007)
     "LICENCE_REQUIRED": (2, False),          # a library file has no declared licence (missing, empty or "unknown"; ADR-008)
+    "INSUFFICIENT_VRAM": (3, False),         # the selected model needs more GPU memory than this machine has (ADR-016)
 }
 ERROR_CODES = tuple(ERROR_TABLE)
 EXIT_CODES = {code: ERROR_TABLE[code][0] for code in ERROR_CODES}
