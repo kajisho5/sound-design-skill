@@ -17,14 +17,14 @@
 
 Music beds (BGM) and sound effects for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Generated files are handed to [audio-production-skill](https://github.com/kajisho5/audio-production-skill) MIX, which places them in the programme; nothing is mixed here. Probing goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.1.0, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
+**Status: 0.2.0, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
 
 | Op | Capability | Engine | Step |
 |---|---|---|---|
 | GENERATE_BGM | `audio.bgm_generate` | ACE-Step 1.5 | 2 |
 | GENERATE_SFX | `audio.sfx_generate` | EzAudio ([ADR-005](docs/decisions.md)) | 3 |
 | Library mode | `audio.library_import` | none: your own files with a declared licence ([ADR-008](docs/decisions.md)) | 4 |
-| SFX cue sheet | (tool `sfx-cues`) | none: library effects or named WAVs ([ADR-013](docs/decisions.md)) | 9 |
+| SFX cue sheet | (tool `sfx-cues`) | none: library effects or named WAVs ([ADR-013](docs/decisions.md); reuse spacing and character, [ADR-015](docs/decisions.md)) | 9 |
 | Loop beds, stingers, seam check | (tools `loop-bed`, `stinger`, `seam-check`) | none: a WAV you already have ([ADR-011](docs/decisions.md)) | 7 |
 
 ```bash
@@ -44,6 +44,7 @@ sound-design loop-bed bed.wav -o loop.wav --duration 8 --json          # end run
 sound-design stinger whoosh.wav -o st.wav --duration 1 --peak-at 0.5 --json   # exact length, peak on the cut (±10 ms)
 sound-design seam-check loop-x10.wav --period 8 --json                 # click / level / spectrum at every seam
 sound-design sfx-cues --cuts 1,2.5,4.75 --emphasis 3.2 --library ./sounds -o cues.json --json   # cue sheet for MIX
+sound-design sfx-cues --cuts 1,12,25 --library ./sounds --min-reuse-spacing 30 --character pop=bright --json   # opt-in
 ```
 
 For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the user first (EzAudio) and how to report licences; tests keep it in step with the contract ([ADR-009](docs/decisions.md)).
@@ -96,6 +97,11 @@ No engine runs: these take a WAV you already have and edit it through ffmpeg-ski
 ## Sound-effect cue sheet ([ADR-013](docs/decisions.md))
 
 `sfx-cues [--cuts <t,...>] [--emphasis <t,...>] [--events <events.json>] [--library <dir>] [--effect cut|emphasis=<name>] [--file <name>=<wav>] [--min-spacing 0.25] [--level -12] [-o cues.json]` writes a cue sheet (schema `sound-design/sfx-cues@1`) for audio-production-skill MIX to place. It mixes nothing and never decides where an emphasis is: one cue per caller time, and a time closer than `--min-spacing` to the last kept cue is dropped (listed with the reason), never moved. Each effect comes from the library (kind `sfx`, tagged with the effect name, declared licence, chosen like `library-pick`) or from a named WAV, and is measured once: its peak (whoosh, rise, ...) or onset (pop, ding, ...) is put on the time (`start = time - anchor_in_file`), and `gain_db` brings its sample peak to `--level` dBFS.
+
+Two opt-in controls ([ADR-015](docs/decisions.md)); without them the sheet is as before:
+
+- **`--min-reuse-spacing S`** (request key `min_reuse_spacing`, off by default). An event whose effect would play the same sound file (the same SHA-256) as a cue kept less than S seconds earlier takes the first file in that effect's library ranking (the `library-pick` order) that no kept cue played within S seconds: the first-ranked file whenever it is free, then the next, never at random. With no such file, or when the effect is a caller-named `--file`, the event is dropped with its reason (`dropped[].by`: `min_reuse_spacing`), never moved. `substitutions` (and each substituted cue's `substituted`) names the file used, the file it replaced and why; each cue's `source` names its entry under `sources`, with that file's licence. The `--min-spacing` check runs first, and a dropped event counts for neither rule. The same inputs always give the same sheet. Suggested values: 30 s for a talking-head edit; shorter for fast-cut edits (with N files an effect has at most N cues in any S seconds).
+- **`--character EFFECT=WORD[,WORD]`** (request key `characters`; per event `"character"`, which replaces it). Only library files for that effect whose tags or mood carry every word are used: "a bright pop" is `--character pop=bright`. Nothing is inferred and no file gains a tag; when no file matches, the call fails with `INPUT_NOT_FOUND`. A named `--file` has no tags, so a character for it is refused. Suggested words for `library-import --tags` / `--mood`: bright, dark, warm, metallic, soft, hard, punchy, subtle, short, long, high, low, rising, falling, airy, playful (any other word matches too).
 
 ## Engines (optional, [ADR-001](docs/decisions.md), [ADR-005](docs/decisions.md))
 
