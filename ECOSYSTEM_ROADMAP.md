@@ -1,11 +1,11 @@
 # Roadmap — sound-design-skill
 
-Part of the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS/blob/main/docs/ecosystem/ROADMAP.md) ecosystem: department **音 (Audio)**, status `scaffold`.
+Part of the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS/blob/main/docs/ecosystem/ROADMAP.md) ecosystem: department **音 (Audio)**, status `active`.
 Written from a read-only audit of this repository on 2026-10-30. Each step below is meant to be one pull request; tick it off by linking the PR.
 
 ## Where it stands
 
-0.3.2: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM; the 4B XL turbo model opt-in with `--model`, >= 20 GB, ADR-016), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, checked by qc-skill's loop seam check, ADR-017), tempo-targeted BGM with a beat grid (step 8, skill-side code complete; the grid checked by `scenes --beats`, ADR-018), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
+0.3.2 (no release tag yet): GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM; the 4B XL turbo model opt-in with `--model`, >= 20 GB, ADR-016), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, checked by qc-skill's loop seam check, ADR-017), tempo-targeted BGM with a beat grid (step 8, skill-side code complete; the grid checked by `scenes --beats`, ADR-018), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
@@ -55,6 +55,10 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
   - なぜ要るか：BGM の権利表記漏れと、Content ID の申し立てを事前に避けられる
   - Done when: a fixture track with a CC BY licence yields its attribution line in the receipt; a track marked Content ID registered is warned about
   - Done (ADR-014): [#17](https://github.com/kajisho5/sound-design-skill/pull/17); `library-import` records `--licence-url`, `--licence-file` (copied into `licences/` with LF line endings, SHA-256 of that text), `--title`, `--provider`, `--attribution` and `--content-id` as the source states them, and still refuses a missing licence; the receipt (`library-pick` licence block and provenance, `handoff.credit_line`) carries the attribution line (declared, the credit, or composed in TASL order from declared parts for CC BY); a Content ID registered track is warned about on import, index and pick; doctor lists stock sources (`MISSING` without an API key, never fetched); local fixtures, unit and against the real ffmpeg-skill
+- [ ] **11. First release: tag and GitHub Release** — the status is `active` ([Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md): a repository that ships working operations behind its contract is `active`, released or not); release state is tracked here instead. Today `pyproject.toml` says 0.3.2, CHANGELOG.md says `unreleased` and there is no tag, so video-production-agent pins this contract from main. Date the CHANGELOG section, tag `v0.3.2` on main and publish a GitHub Release with that section as its notes. A release workflow like the other skills' (one job on push to main; CI-, docs- and test-only merges cut no release) can follow.
+  - Done when: the tag `v0.3.2` and its GitHub Release exist, `contract --json` reports the tag's version, and video-production-agent can pin the tag instead of main
+- [ ] **12. The licence record becomes the base of a shared spec** — the record `library-import` writes (licence, author, source URL, attribution line, the SHA-256 of the licence text, Content ID; step 10, ADR-014) is the base of Velisa's shared licence-record spec, extended there to video and images ([Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md); no asset-library skill is created). Publish the record's shape as a schema file in this repository, keep its field names stable, and make any change through the Velisa spec. Project credits stay with artifacts-skill `credits_attribution`
+  - Done when: the schema file is in the repository, a test validates `library-import` output against it, and the Velisa spec links it
 
 ---
 Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
