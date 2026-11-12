@@ -692,3 +692,29 @@ The drifting bed's band step is near the 6 dB limit. Its 1 s windows hold differ
 **Status.** Step 7's Done-when is met on fixtures and ticked. Still open, outside this repository's CI: a loop of real ACE-Step / EzAudio output. That needs an engine install (ADR-001), and none is installed here.
 
 **Version** 0.3.1 (patch): tests, CI and docs only.
+
+## ADR-018 Tempo-targeted beds checked by ffmpeg-skill `scenes --beats` against the written grid
+
+**Context.** Roadmap step 8's Done-when is "ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms". ADR-012 could not show it: `scenes --beats` (3.1.8) refused audio-only input, and on a video wrapper its phase was 40-60 ms off. ffmpeg-skill 3.2.2 fixes both. It measures a WAV with no picture (`audio_only: true`), uses the real envelope step, and refines each onset on the decoded samples; its changelog puts a click track's grid within 1 ms.
+
+**What was found.** The fake ACE-Step engine of the tests wrote its stereo in antiphase (right = -left). `scenes` downmixes to mono, so it measured digital silence (`audio_rms` 0) and no beats. That is a fixture fault, not ffmpeg-skill's. The fake now writes both channels in phase. No test depended on the antiphase.
+
+**Decision.**
+- No change to the CLI, the contract or any op. This skill still does not call `scenes`: the grid it writes is the requested one (`measured: false`, ADR-012), and checking a bed against it is the caller's step. SKILL.md and the README give the command.
+- An integration test runs `generate-bgm --bpm` through the CLI and the real worker, with the fake engine, then runs ffmpeg-skill's own `scripts/scenes.py <bed> --beats --json`. It requires:
+  - a usable grid at the requested tempo (±0.5 BPM);
+  - as many measured beats as written ones;
+  - every written beat within 20 ms of a measured one.
+  On ffmpeg-skill before 3.2.2 (CI's 3.0.0 job), the test asserts the refusal instead, so nothing skips.
+
+**Measured** (ffmpeg-skill 3.6.2, the fake engine's click on every beat):
+
+| request | bed | beats written / measured | worst distance |
+|---|---|---|---|
+| 120 BPM, 4/4, 15 s | 16 s, 8 bars | 32 / 32 | 1.00 ms |
+| 90 BPM, 3/4, 20 s | 20 s, 10 bars | 30 / 30 | 1.07 ms |
+| 137 BPM, 4/4, 12 s | 12.26 s, 7 bars | 28 / 28 | 1.06 ms |
+
+**Status.** Step 8 stays open. The measurement path, the written grid and the tolerance are now shown end to end. What remains is a real ACE-Step bed: does the engine keep the requested tempo, and does its first beat fall at 0 s? That needs an engine install (ADR-001), and none is installed here. The fake engine puts its clicks on the grid by construction.
+
+**Version** 0.3.2 (patch): tests and docs only.

@@ -17,7 +17,7 @@
 
 Music beds (BGM) and sound effects for the [AI Video Production OS](https://github.com/kajisho5/AI-video-production-OS) (department 音 / Audio). Local engines only. They are optional and never downloaded by the skill. Generated files are handed to [audio-production-skill](https://github.com/kajisho5/audio-production-skill) MIX, which places them in the programme; nothing is mixed here. Probing goes through [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill).
 
-**Status: 0.3.1, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
+**Status: 0.3.2, GENERATE_BGM, GENERATE_SFX and library mode experimental.** `contract`, `doctor`, `engines`, `generate-bgm` ([ADR-004](docs/decisions.md)), `generate-sfx` ([ADR-006](docs/decisions.md); EzAudio needs `--acknowledge-ezaudio-training-data`, [ADR-007](docs/decisions.md)) and library mode (`library-import`, `library-index`, `library-pick`, [ADR-008](docs/decisions.md): your own files with a declared licence, no engine) work.
 
 | Op | Capability | Engine | Step |
 |---|---|---|---|
@@ -52,7 +52,7 @@ For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the 
 
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
 
-- **Tempo ([ADR-012](docs/decisions.md)).** `--bpm <30-300> [--time-signature 2|3|4|6]` passes the tempo and time signature to ACE-Step (`GenerationParams.bpm` / `timesignature`), rounds the length to the nearest whole number of bars (120 BPM and 15 s become 8 bars, 16 s), and writes the beat grid beside the WAV as `<name>.beats.json` (also `tempo_map` in the result). The grid is the requested one, first beat at 0 s, `measured: false`.
+- **Tempo ([ADR-012](docs/decisions.md)).** `--bpm <30-300> [--time-signature 2|3|4|6]` passes the tempo and time signature to ACE-Step (`GenerationParams.bpm` / `timesignature`), rounds the length to the nearest whole number of bars (120 BPM and 15 s become 8 bars, 16 s), and writes the beat grid beside the WAV as `<name>.beats.json` (also `tempo_map` in the result). The grid is the requested one, first beat at 0 s, `measured: false`. ffmpeg-skill `scenes --beats` (3.2.2 or later, audio-only input) checks a bed against it: on a click track at the grid, every beat is within about 1 ms ([ADR-018](docs/decisions.md)).
 - **Inputs.** `--prompt` and / or `--tags` (joined into one caption, < 512 characters), `--duration` (ACE-Step: 10-600 s), `--seed` (drawn and recorded when omitted). Optional: `--lyrics <file>` (default instrumental), `--device auto|cuda|mps|xpu|cpu` and `--model` (below).
 - **Model ([ADR-016](docs/decisions.md)).** `--model acestep-v15-turbo|acestep-v15-xl-turbo` (request key `model`). The default is the 2B turbo model, as before. `acestep-v15-xl-turbo` is ACE-Step 1.5 XL turbo, a 4B DiT (MIT, commercial use of the output stated by its model card), loaded through the same API. See [Choosing the BGM model](#choosing-the-bgm-model-gpu-memory) for its GPU memory and download.
 - **Checks first.** Arguments, the output path (a new `.wav` unless `--overwrite`), the engine (`OK`) and ffmpeg-skill are all checked before anything runs.

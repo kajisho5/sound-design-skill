@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -106,6 +108,34 @@ class GenerateBgmIntegrationTests(unittest.TestCase):
             grid = json.load(fh)
         self.assertEqual((grid["bpm"], grid["bars"], len(grid["beats"]), grid["bar_lines"][-1]), (120, 8, 32, 16.0))
         self.assertEqual((grid["measured"], grid["audio"]["sha256"]), (False, doc["output"]["sha256"]))
+
+    def test_scenes_beats_on_a_tempo_bed_agrees_with_its_written_grid_within_20_ms(self):
+        """Roadmap step 8's Done-when, on the fake engine's output (ADR-018): ffmpeg-skill `scenes --beats` (audio-only
+        input from 3.2.2) finds every written beat within 20 ms; older releases refuse a WAV, which is asserted."""
+        skill = FfmpegSkill.locate(str(FFMPEG_SKILL_DIR))
+        audio_only = tuple(int(p) for p in skill.info().version.split(".")[:3]) >= (3, 2, 2)
+        for bpm, duration, meter in (("120", "15", "4"), ("90", "20", "3"), ("137", "12", "4")):
+            with self.subTest(bpm=bpm):
+                out = os.path.join(self.dir, f"pv{bpm}.wav")
+                rc, doc = run_cli("generate-bgm", "--prompt", "upbeat pop", "--duration", duration, "--bpm", bpm,
+                                  "--time-signature", meter, "-o", out, "--seed", "9",
+                                  "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")
+                self.assertEqual(rc, 0, doc)
+                with open(os.path.join(self.dir, f"pv{bpm}.beats.json"), encoding="utf-8") as fh:
+                    written = [b["time"] for b in json.load(fh)["beats"]]
+                proc = subprocess.run([sys.executable, os.path.join(str(FFMPEG_SKILL_DIR), "scripts", "scenes.py"), out,
+                                       "--beats", "--json"], capture_output=True, text=True, encoding="utf-8")
+                if not audio_only:
+                    self.assertNotEqual(proc.returncode, 0, proc.stdout)                 # "input has no video stream"
+                    continue
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                scenes = json.loads(proc.stdout)
+                measured = scenes["beats"]
+                self.assertTrue(scenes["audio_only"] and scenes["beat_grid"]["usable"], scenes["beat_grid"])
+                self.assertAlmostEqual(scenes["beat_grid"]["tempo_bpm"], float(bpm), delta=0.5)
+                self.assertEqual(len(measured), len(written), (measured, written))
+                worst = max(min(abs(t - m) for m in measured) for t in written)
+                self.assertLessEqual(worst, 0.020, (measured, written))
 
     def test_the_xl_model_through_the_same_api_and_its_refusals(self):
         """ADR-016: --model acestep-v15-xl-turbo reaches ACE-Step as config_path; too small a GPU and missing files are
