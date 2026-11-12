@@ -353,6 +353,41 @@ class CueSheetIntegrationTests(unittest.TestCase):
             with open(out, encoding="utf-8") as fh:
                 self.assertEqual(json.load(fh)["cues"], doc["cues"])
 
+    def test_reuse_spacing_rotates_and_character_filters(self):
+        """ADR-015 through the CLI: two whooshes and two pops imported with their tags and mood; a whoosh is not
+        replayed within 30 s (the second-ranked one takes its place), the pops are the bright one, and a bright pop
+        with no free file is dropped."""
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = os.path.join(tmp, "効果音")
+            os.mkdir(lib)
+            cli = lambda *a: run_cli(*a, "--ffmpeg-skill", str(FFMPEG_SKILL_DIR), "--json")   # noqa: E731
+            for name, kind, at, seed, extra in (("whoosh-a", "whoosh", 0.4, 1, ["--tags", "whoosh"]),
+                                                ("whoosh-b", "whoosh", 0.3, 2, ["--tags", "whoosh", "--mood", "falling"]),
+                                                ("pop-a", "hit", 0.02, 3, ["--tags", "pop"]),
+                                                ("pop-bright", "hit", 0.03, 4, ["--tags", "pop,bright"])):
+                src = write_burst_wav(os.path.join(tmp, f"{name}.wav"), kind, 0.8, at=at, seed=seed)
+                rc, doc = cli("library-import", src, "--library", lib, "--licence", "CC0-1.0", "--kind", "sfx", *extra)
+                self.assertEqual(rc, 0, doc)
+            args = ("sfx-cues", "--cuts", "1,10,40", "--emphasis", "5,6", "--library", lib, "--min-reuse-spacing", "30",
+                    "--character", "pop=bright")
+            rc, doc = cli(*args)
+            self.assertEqual(rc, 0, doc)
+            self.assertEqual([(c["time"], c["file"]) for c in doc["cues"]],
+                             [(1.0, "whoosh-a.wav"), (5.0, "pop-bright.wav"), (10.0, "whoosh-b.wav"), (40.0, "whoosh-a.wav")])
+            self.assertEqual([(s["time"], s["file"], s["instead_of"]) for s in doc["substitutions"]],
+                             [(10.0, "whoosh-b.wav", "whoosh-a.wav")])
+            self.assertEqual([(d["time"], d["by"]) for d in doc["dropped"]], [(6.0, "min_reuse_spacing")])
+            for c in doc["cues"]:
+                src = doc["sources"][c["source"]]
+                self.assertEqual(c["anchor_in_file"], src["anchors"][c["align"]])
+                self.assertAlmostEqual(c["start"] + c["anchor_in_file"], c["time"], places=6)
+            self.assertLessEqual(abs(doc["sources"]["whoosh@2"]["anchors"]["peak"] - 0.3), 0.05)
+            rc, again = cli(*args)
+            self.assertEqual((rc, again["cues"], again["dropped"], again["substitutions"]),
+                             (0, doc["cues"], doc["dropped"], doc["substitutions"]))
+            rc, falling = cli("sfx-cues", "--cuts", "1", "--library", lib, "--character", "whoosh=falling")
+            self.assertEqual((rc, [c["file"] for c in falling["cues"]]), (0, ["whoosh-b.wav"]))     # mood matches too
+
 
 @unittest.skipUnless(FFMPEG_SKILL_DIR and HAVE_FFMPEG, "needs an ffmpeg-skill checkout and ffmpeg/ffprobe on PATH")
 class StockLicenceIntegrationTests(unittest.TestCase):

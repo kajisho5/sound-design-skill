@@ -140,15 +140,26 @@ _CUE_TOOLS = [
                     "the caller gives, for audio-production-skill MIX to place: one cue per event at the caller's time "
                     "(the effect's peak or onset on it), a gain to a stated level, events closer than a minimum spacing "
                     "dropped, never moved; effects from the library (declared licence) or a named WAV; the skill never "
-                    "decides where an emphasis is and mixes nothing (ADR-013)",
+                    "decides where an emphasis is and mixes nothing (ADR-013). Opt-in: a minimum reuse spacing for the "
+                    "same sound file (the next library file in rank order, else the event is dropped) and a character "
+                    "filter on the library's tags and mood (ADR-015)",
      "inputs": ["cut times and / or emphasis times (or an events JSON)", "library folder and / or NAME=WAV files",
-                "effect per event kind", "minimum spacing", "level"],
+                "effect per event kind", "minimum spacing", "level", "minimum reuse spacing (optional, off by default)",
+                "character words per effect or per event (optional)"],
      "argv": ["sfx-cues", "[--cuts <t,t,...>]", "[--emphasis <t,t,...>]", "[--events <events.json>]", "[--library <dir>]",
               "[--effect cut|emphasis=<name>]", "[--file <name>=<wav>]", f"[--min-spacing {cues.DEFAULT_SPACING:g}]",
+              "[--min-reuse-spacing <seconds>]", "[--character <effect>=<word,...>]",
               f"[--level {cues.DEFAULT_LEVEL:g}]", "[-o <cues.json>]", "[--overwrite]", "[--ffmpeg-skill <dir>]",
               "[--timeout 600]", "--json"],
      "schema": cues.CUES_SCHEMA, "default_effects": dict(cues.DEFAULT_EFFECTS),
-     "align": {"peak": sorted(cues.PEAK_EFFECTS), "onset": "every other effect (first sample at 10 % of the peak)"}},
+     "align": {"peak": sorted(cues.PEAK_EFFECTS), "onset": "every other effect (first sample at 10 % of the peak)"},
+     "reuse": {"flag": "--min-reuse-spacing", "request_key": "min_reuse_spacing", "default": None,
+               "range_s": [0.0, cues.MAX_REUSE_SPACING], "same_file": "the same SHA-256", "rule": cues.REUSE_RULE,
+               "recorded_in": ["substitutions", "cues[].substituted", "dropped[].by = min_reuse_spacing"]},
+     "character": {"flag": "--character", "request_key": "characters", "event_key": "character",
+                   "matches": "every word in the library file's tags or mood (NFKC, case-insensitive)",
+                   "vocabulary": list(cues.CHARACTER_VOCABULARY), "vocabulary_closed": False,
+                   "rule": cues.CHARACTER_RULE}},
 ]
 
 
@@ -207,7 +218,8 @@ def contract() -> Dict[str, Any]:
                          "downloading engines or model weights (one-time manual step; doctor says how)",
                          "network access at run time", "direct ffmpeg calls (every media step is an ffmpeg-skill tool)"],
         "handoff": {"cues": "audio-production-skill MIX places each cue's file at its start with its gain; the times are "
-                            "the caller's, the skill adds and moves none",
+                            "the caller's, the skill adds and moves none; each cue's file and licence are under "
+                            "sources[cue.source]",
                     "loop": "the editor or audio-production-skill MIX repeats the loop end to end (no crossfade)",
                     "stinger": "audio-production-skill MIX places the stinger starting peak_at seconds before the cut",
                     "bgm": "audio-production-skill MIX places the generated WAV (with its provenance) under the programme",

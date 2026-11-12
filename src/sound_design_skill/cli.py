@@ -19,6 +19,7 @@ Exit code: 0 on success; doctor exits 1 when its status is `fail`, seam-check wh
   sound-design stinger <in.wav> -o <out.wav> --duration <s> --peak-at <s> [--type whoosh|hit|rise] --json (ADR-011)
   sound-design seam-check <file.wav> --period <s> | --seams <t,t,...> --json                              (ADR-011)
   sound-design sfx-cues --cuts <t,t,...> [--emphasis <t,...>] --library <dir> [-o cues.json] --json        (ADR-013)
+                        [--min-reuse-spacing <s>] [--character <effect>=<word,...>]                      (ADR-015)
 Library mode runs no engine (never ACE-Step or EzAudio) and refuses a file without a declared licence."""
 from __future__ import annotations
 
@@ -179,7 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
     cu.add_argument("--cuts", type=_time_list, default=[], help="comma-separated cut times in seconds")
     cu.add_argument("--emphasis", type=_time_list, default=[], help="comma-separated emphasis times in seconds")
     cu.add_argument("--events", dest="events_path", help="JSON: [{\"time\", \"kind\": cut|emphasis, \"effect\", \"level\", "
-                                                         "\"align\": peak|onset, \"label\"}] or {\"events\": [...]}")
+                                                         "\"align\": peak|onset, \"character\": [words], \"label\"}] or "
+                                                         "{\"events\": [...]}")
     cu.add_argument("--library", help="library folder to take the effects from (kind sfx, tagged with the effect name)")
     cu.add_argument("--effect", action="append", default=[], type=_pair, metavar="KIND=NAME",
                     help="effect for an event kind (default cut=whoosh, emphasis=pop)")
@@ -189,6 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"seconds; an event closer than this to the last kept cue is dropped (default {DEFAULT_SPACING:g})")
     cu.add_argument("--level", type=float, default=DEFAULT_LEVEL,
                     help=f"sample peak of every cue in dBFS, unless the event gives its own (default {DEFAULT_LEVEL:g})")
+    cu.add_argument("--min-reuse-spacing", type=float, default=None, metavar="SECONDS",
+                    help="off by default; an event whose effect would play the same sound file as a cue kept less than "
+                         "this many seconds earlier takes the next library file for that effect in rank order, or is "
+                         "dropped when there is none (a named --file is never replaced)")
+    cu.add_argument("--character", action="append", default=[], type=_pair, metavar="EFFECT=WORD[,WORD]",
+                    help="only library files for EFFECT whose tags or mood carry every WORD (e.g. pop=bright; "
+                         "repeated flags for one effect add words); an event's own \"character\" replaces it")
     cu.add_argument("-o", "--output", help="write the cue sheet here too (.json)")
     cu.add_argument("--overwrite", action="store_true", help="allow replacing an existing cue sheet")
     cu.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory")
@@ -213,6 +222,20 @@ def _time_list(text: str) -> list:
 
 def _tag_list(text: str) -> list:
     return [t.strip() for t in text.split(",") if t.strip()]
+
+
+def _characters(pairs: list) -> dict:
+    """--character EFFECT=WORD[,WORD], repeatable: the words of every flag for one effect are all required. A flag
+    with no word would silently filter nothing, so it is refused."""
+    out: Dict[str, list] = {}
+    for effect, value in pairs:
+        words = _tag_list(value)
+        if not words:
+            raise SoundDesignError("INVALID_ARGUMENT", f"--character {effect}={value}: give at least one word",
+                                   {"character": f"{effect}={value}"})
+        out.setdefault(effect, [])
+        out[effect] += [w for w in words if w not in out[effect]]
+    return out
 
 
 def _emit(doc: Dict[str, Any], as_json: bool) -> None:
@@ -302,7 +325,9 @@ def _human(doc: Dict[str, Any]) -> None:
             print(f"  {s['time']:.3f}s: {'ok' if s['passed'] else '; '.join(s['reasons'])}")
     elif doc.get("schema", "").endswith("/sfx-cues@1"):
         for c in doc["cues"]:
-            print(f"{c['time']:9.3f}s  {c['kind']:8} {c['effect']:10} start {c['start']:.3f}s  gain {c['gain_db']:+.1f} dB  {c['file']}")
+            instead = f"  (instead of {c['substituted']['for']})" if c.get("substituted") else ""
+            print(f"{c['time']:9.3f}s  {c['kind']:8} {c['effect']:10} start {c['start']:.3f}s  gain {c['gain_db']:+.1f} dB  "
+                  f"{c['file']}{instead}")
         for d in doc["dropped"]:
             print(f"{d['time']:9.3f}s  dropped: {d['reason']}")
         for w in doc.get("warnings") or []:
@@ -395,7 +420,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                        library_dir=args.library, effects=dict(args.effect), files=dict(args.file),
                                        min_spacing=args.min_spacing, level=args.level, output_path=args.output,
                                        overwrite=args.overwrite, ffmpeg_skill_dir=args.ffmpeg_skill,
-                                       timeout=args.timeout)), as_json)
+                                       timeout=args.timeout, min_reuse_spacing=args.min_reuse_spacing,
+                                       characters=_characters(args.character))), as_json)
             return 0
     except SoundDesignError as e:
         _emit({"ok": False, "skill": {"id": SKILL_ID, "version": __version__}, "error": e.to_dict()}, as_json)

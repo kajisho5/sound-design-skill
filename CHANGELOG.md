@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - unreleased
+
+SFX cue variety (ADR-015). Both opt-in; without them a cue sheet is as before.
+
+- `sfx-cues --min-reuse-spacing <s>` (request key `min_reuse_spacing`, default off): an event whose effect would play the same sound file (same SHA-256) as a cue kept less than that many seconds earlier takes the first file in that effect's library ranking that no kept cue played within that time (rank order, never random). With none, or for a named `--file`, the event is dropped with its reason, never moved. `substitutions` and each cue's `substituted` say which file replaced which; every drop carries `by` (`min_spacing` or `min_reuse_spacing`). The `--min-spacing` check comes first, and a dropped event counts for neither rule.
+- `sfx-cues --character <effect>=<word,...>` (request key `characters`; per event `character`): only library files whose tags or mood carry every word, e.g. a bright pop. No library field is added and no tag is inferred; no match is `INPUT_NOT_FOUND`. A suggested vocabulary is in SKILL.md, the README and the contract.
+- Each cue names its entry under `sources` (`source`); sources carry `effect`, `character` and `rank`. The schema stays `sound-design/sfx-cues@1`.
+
 ## 0.1.0 - unreleased
 
 Stock music and SFX with licence records (roadmap step 10, ADR-014).

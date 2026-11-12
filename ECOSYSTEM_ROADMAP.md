@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-0.1.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, skill side), tempo-targeted BGM with a beat grid (step 8, skill side), SFX cue sheets (step 9), stock licence records (step 10). `scaffold` in ecosystem.json.
+0.2.0: GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, skill-side code complete), tempo-targeted BGM with a beat grid (step 8, skill-side code complete), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
@@ -37,14 +37,17 @@ The agent plans `bgm.library` / `bgm.prompt` as a CONFIRM bed that becomes the l
   - なぜ要るか：ループ素材の BGM と、スティンガーの効果音をカット点に合わせて用意できる
   - Done when: a looped bed repeated 10 times passes qc-skill's loop seam check; a stinger's peak is within 10 ms of the stated time
   - Skill side ([#14](https://github.com/kajisho5/sound-design-skill/pull/14), ADR-011): `loop-bed`, `stinger` and `seam-check`, no engine, edits through ffmpeg-skill; a fixture loop repeated 10 times passes this skill's `seam-check` at all nine seams and a naive one fails; whoosh / hit / rise stingers land within 10 ms. Open: qc-skill has no loop seam check (proposal to Velisa's ROADMAP), and no real ACE-Step / EzAudio output was looped
+  - Status 2026-11-12: the skill-side code is complete. The step stays open on two things this repository's CI cannot show: qc-skill's loop seam check (qc-skill main still has none) and a loop of a real ACE-Step / EzAudio output (it needs an engine install, ADR-001)
 - [ ] **8. Tempo-targeted generation and a tempo map** — GENERATE_BGM at a requested BPM and length, ending on a bar line, and the beat grid written as data beside the audio (no re-measuring needed downstream)
   - なぜ要るか：「120BPM、15秒」の文字PVに、ぴったり合う音楽と拍の情報を同時に渡せる
   - Done when: ffmpeg-skill `scenes --beats` on the output agrees with the written grid within 20 ms
   - Skill side ([#15](https://github.com/kajisho5/sound-design-skill/pull/15), ADR-012): `generate-bgm --bpm [--time-signature]` passes the tempo to ACE-Step, rounds the length to whole bars and writes `<name>.beats.json`. Open: no real ACE-Step output to measure, and ffmpeg-skill `scenes --beats` refuses audio-only input (on a video wrapper its phase was 40-60 ms off a synthetic click track); proposal to Velisa's ROADMAP
+  - Status 2026-11-12: the skill-side code is complete. ffmpeg-skill's changelog says 3.2.2 measures audio-only input with `scenes --beats` and puts a click track's grid within 1 ms (not re-measured here; this skill does not call `scenes`). The step stays open until a real ACE-Step output is measured against its grid (it needs an engine install, ADR-001)
 - [x] **9. Sound-effect cue sheet** — SFX_CUES: from cut points and emphasis times the caller gives, a cue sheet of library or generated effects (pop, whoosh, ding) with levels and a minimum spacing, for audio-production MIX to place; the skill never decides where the emphasis is
   - なぜ要るか：YouTube 風の効果音を、カットや強調テロップの時刻に揃えて置ける
   - Done when: a fixture with 10 cut times yields a cue sheet whose effects sit at those times and respect the spacing
   - Done (ADR-013): [#16](https://github.com/kajisho5/sound-design-skill/pull/16); `sound-design sfx-cues` writes one cue per caller time (none added, none moved; one closer than `--min-spacing` to the last kept cue is dropped with the reason), effects from the library (declared licence) or named WAVs, the effect's peak or onset on the time, `gain_db` to `--level`; the 10-cut fixture gives 10 cues at those times with every gap at least the spacing, unit and against the real ffmpeg-skill
+  - Follow-up (ADR-015, 0.2.0, [#18](https://github.com/kajisho5/sound-design-skill/pull/18)): opt-in `--min-reuse-spacing S` (request key `min_reuse_spacing`; off by default): an event whose effect would replay the same file within S seconds takes the next library file in rank order, else it is dropped with the reason (a named `--file` is never replaced); `substitutions` records each replacement; and `--character EFFECT=WORD` (or an event's `character`) filtered on the library's existing tags and mood, with a suggested vocabulary. Still no event added or moved; unit and against the real ffmpeg-skill. The agent does not plan sound effects yet (see Wiring)
 - [x] **10. Stock music and SFX with licence records** — library mode reads royalty-free sources the user has downloaded (with their licence text or URL), records the licence, the attribution line and whether the track is registered for Content ID when the source says so, and refuses a file without a licence as today
   - なぜ要るか：BGM の権利表記漏れと、Content ID の申し立てを事前に避けられる
   - Done when: a fixture track with a CC BY licence yields its attribution line in the receipt; a track marked Content ID registered is warned about
