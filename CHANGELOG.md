@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.3.2 - unreleased
+## 0.3.2 - 2026-11-13
+
+First release: the tag `v0.3.2` and its GitHub Release (roadmap step 11, ADR-019). From now on a pushed `v*` tag makes the GitHub Release from its CHANGELOG.md section (`.github/workflows/release.yml`); nothing is published to a package index. It also carries 0.3.1, 0.3.0, 0.2.0 and 0.1.0 below, which were never tagged.
 
 Roadmap step 8, the measurement half (ADR-018). No CLI, contract or op change.
 
@@ -8,14 +10,14 @@ Roadmap step 8, the measurement half (ADR-018). No CLI, contract or op change.
 - The test engine's stereo was in antiphase (right = -left), so a mono downmix was silent and `scenes` found no beats. It is now in phase.
 - Step 8 stays open: the bed measured is the test engine's, which puts its clicks on the grid. Real ACE-Step output still needs an engine install.
 
-## 0.3.1 - unreleased
+## 0.3.1 - not tagged (first released in 0.3.2)
 
 Roadmap step 7 closed (ADR-017). No CLI, contract or op change.
 
 - A `loop-bed` result repeated ten times now passes qc-skill's own loop seam check, as the Done-when asks. This is qc-skill 1.3.0's `AudioRule.loop_seam`, run through `qc run`, at the wrap and all nine seams. It is given this skill's `seam-check` limits: window 1 s, click 3, level 1.5 dB, band 6 dB. Two beds pass: the periodic fixture and a new drifting bed that never repeats exactly. A naive cut fails on the click. SKILL.md and the README give the rule to hand to qc-skill.
 - CI's integration job checks out qc-skill main (`SOUND_DESIGN_QC_SKILL_DIR`).
 
-## 0.3.0 - unreleased
+## 0.3.0 - not tagged (first released in 0.3.2)
 
 GENERATE_BGM model selection (ADR-016). Opt-in; without `--model` a bed is made as before.
 
@@ -24,7 +26,7 @@ GENERATE_BGM model selection (ADR-016). Opt-in; without `--model` a bed is made 
 - The result and provenance carry the model that ran with its own licence and output-use statement (`engine.model`, `engine.weights_license`, `engine.output_use`, `engine.training_data`), `request.model`, and `provenance.parameters.model` (`selected_by`, repository, revision, the memory check).
 - `doctor` lists each BGM model under `checks.operations.bgm.models` (files, `vram`, `ready`, `install`); a missing XL model is not a problem, an XL model this GPU cannot run is a warning. The contract publishes the models (`engines.registered.acestep.models`, `default_model`), the flag in the generate-bgm `argv`, `device.model_fit`, `policy.models` and `INSUFFICIENT_VRAM`.
 
-## 0.2.0 - unreleased
+## 0.2.0 - not tagged (first released in 0.3.2)
 
 SFX cue variety (ADR-015). Both opt-in; without them a cue sheet is as before.
 
@@ -32,7 +34,7 @@ SFX cue variety (ADR-015). Both opt-in; without them a cue sheet is as before.
 - `sfx-cues --character <effect>=<word,...>` (request key `characters`; per event `character`): only library files whose tags or mood carry every word, e.g. a bright pop. No library field is added and no tag is inferred; no match is `INPUT_NOT_FOUND`. A suggested vocabulary is in SKILL.md, the README and the contract.
 - Each cue names its entry under `sources` (`source`); sources carry `effect`, `character` and `rank`. The schema stays `sound-design/sfx-cues@1`.
 
-## 0.1.0 - unreleased
+## 0.1.0 - not tagged (first released in 0.3.2)
 
 Stock music and SFX with licence records (roadmap step 10, ADR-014).
 
