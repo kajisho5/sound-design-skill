@@ -718,3 +718,16 @@ The drifting bed's band step is near the 6 dB limit. Its 1 s windows hold differ
 **Status.** Step 8 stays open. The measurement path, the written grid and the tolerance are now shown end to end. What remains is a real ACE-Step bed: does the engine keep the requested tempo, and does its first beat fall at 0 s? That needs an engine install (ADR-001), and none is installed here. The fake engine puts its clicks on the grid by construction.
 
 **Version** 0.3.2 (patch): tests and docs only.
+
+## ADR-019 First release: tag v0.3.2 on main; a pushed v* tag makes the GitHub Release from CHANGELOG.md
+
+### Context
+
+Roadmap step 11. The status is `active` (Velisa ownership decisions 2026-11-12, DECISION_LOG D13): working operations behind the contract, released or not. Until now no version was tagged and every CHANGELOG.md section said `unreleased`, so video-production-agent pinned this contract from main. There was no release workflow.
+
+### Decision
+
+- **The first release is the committed version.** `pyproject.toml` stays at 0.3.2; the tag is `v0.3.2`, on the main commit that dates the CHANGELOG.md section. Earlier sections that were never tagged say `not tagged (first released in 0.3.2)`; their notes stay as they were.
+- **A pushed `v*` tag makes the GitHub Release** (`.github/workflows/release.yml`). The job fails unless the tag equals `v` + the `pyproject.toml` version and CHANGELOG.md has a section for that version that is dated (not `unreleased`) and not empty. That section is the release notes. A release that already exists is left alone, so a re-run does nothing.
+- **Nothing goes to a package index.** The skill is installed from a git checkout across the ecosystem; no PyPI token is configured. Adding publishing needs its own decision.
+- **The next release.** Bump `pyproject.toml` (minor or patch) in the pull request that changes behaviour, with its CHANGELOG.md section; date the section, merge, then tag the merge commit. `contract --json` reports the `pyproject.toml` version, so a tag and its contract always agree. A workflow that resolves and tags the next version on push to main, like the other skills', can replace the manual tag later; it would have to push the tag and create the release in one job, because a tag pushed with the default token starts no workflow.
