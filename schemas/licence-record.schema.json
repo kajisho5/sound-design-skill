@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kajisho5/sound-design-skill/blob/main/schemas/licence-record.schema.json",
+  "title": "sound-design-skill licence record",
+  "description": "The licence record library-import writes (roadmap step 12). `entry` is one file's entry in sound-library.json, as stored; `record` is that entry resolved for a reader (the `licence` block of library-import, library-index rows and provenance). This shape is the base of the Velisa shared licence-record spec (docs/specs/licence-record.md), which extends it to video and images; field names are kept stable here, and any change goes through that spec. A licence is recorded as declared and never verified.",
+  "$defs": {
+    "text": {"type": "string", "minLength": 1},
+    "optional_text": {"type": ["string", "null"]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "words": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "entry": {
+      "type": "object",
+      "required": ["licence", "kind", "tags", "mood", "loopable", "sha256", "measured", "imported_from", "imported_at", "imported_by"],
+      "additionalProperties": false,
+      "properties": {
+        "licence": {"$ref": "#/$defs/text", "description": "as declared: an SPDX id or the licence's name or text"},
+        "kind": {"enum": ["bgm", "sfx"]},
+        "tags": {"$ref": "#/$defs/words"},
+        "mood": {"$ref": "#/$defs/words"},
+        "loopable": {"type": "boolean"},
+        "source": {"$ref": "#/$defs/text", "description": "the source URL, or text"},
+        "provider": {"$ref": "#/$defs/text", "description": "the site or service it was downloaded from"},
+        "author": {"$ref": "#/$defs/text"},
+        "title": {"$ref": "#/$defs/text"},
+        "credit": {"$ref": "#/$defs/text", "description": "the credit line the licence asks for"},
+        "attribution": {"$ref": "#/$defs/text", "description": "the attribution line exactly as the source asks for it"},
+        "licence_url": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://\\S+$", "description": "recorded, never opened"},
+        "licence_file": {"$ref": "#/$defs/text", "description": "the licence text, copied into <library>/licences/"},
+        "licence_text_sha256": {"$ref": "#/$defs/sha256"},
+        "content_id": {"enum": ["registered", "not-registered"], "description": "only as the source states it"},
+        "sha256": {"$ref": "#/$defs/sha256", "description": "the file's content at import"},
+        "measured": {"type": "object", "description": "probed facts (duration, streams; loudness when measured)"},
+        "imported_from": {"$ref": "#/$defs/text", "description": "the input's file name, never its path"},
+        "imported_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"},
+        "imported_by": {"$ref": "#/$defs/text", "description": "<skill> <version>"}
+      }
+    },
+    "record": {
+      "type": "object",
+      "required": ["licence", "status", "declared_as", "verified", "usable", "declared_in", "source", "provider", "author", "title",
+                   "credit", "licence_url", "licence_file", "licence_text_sha256", "content_id", "attribution", "attribution_source", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "licence": {"$ref": "#/$defs/text", "description": "the declared text, or \"unknown\""},
+        "status": {"enum": ["declared", "unknown"]},
+        "declared_as": {"$ref": "#/$defs/optional_text"},
+        "verified": {"const": false},
+        "usable": {"type": "boolean"},
+        "declared_in": {"$ref": "#/$defs/optional_text"},
+        "source": {"$ref": "#/$defs/optional_text"},
+        "provider": {"$ref": "#/$defs/optional_text"},
+        "author": {"$ref": "#/$defs/optional_text"},
+        "title": {"$ref": "#/$defs/optional_text"},
+        "credit": {"$ref": "#/$defs/optional_text"},
+        "licence_url": {"$ref": "#/$defs/optional_text"},
+        "licence_file": {"$ref": "#/$defs/optional_text"},
+        "licence_text_sha256": {"$ref": "#/$defs/optional_text"},
+        "content_id": {"enum": ["registered", "not-registered", "unknown"]},
+        "attribution": {"$ref": "#/$defs/optional_text"},
+        "attribution_source": {"enum": ["declared", "credit", "composed", null]},
+        "note": {"$ref": "#/$defs/text"}
+      }
+    }
+  }
+}

@@ -731,3 +731,23 @@ Roadmap step 11. The status is `active` (Velisa ownership decisions 2026-11-12, 
 - **A pushed `v*` tag makes the GitHub Release** (`.github/workflows/release.yml`). The job fails unless the tag equals `v` + the `pyproject.toml` version and CHANGELOG.md has a section for that version that is dated (not `unreleased`) and not empty. That section is the release notes. A release that already exists is left alone, so a re-run does nothing.
 - **Nothing goes to a package index.** The skill is installed from a git checkout across the ecosystem; no PyPI token is configured. Adding publishing needs its own decision.
 - **The next release.** Bump `pyproject.toml` (minor or patch) in the pull request that changes behaviour, with its CHANGELOG.md section; date the section, merge, then tag the merge commit. `contract --json` reports the `pyproject.toml` version, so a tag and its contract always agree. A workflow that resolves and tags the next version on push to main, like the other skills', can replace the manual tag later; it would have to push the tag and create the release in one job, because a tag pushed with the default token starts no workflow.
+
+## ADR-020 The licence record's shape is published as a schema file, the base of the Velisa licence-record spec
+
+**Context.** The [Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md)
+(D17) create no asset-library skill. The shared licence record (licence, author, source URL, attribution line, the SHA-256 of the
+licence text, Content ID) becomes a Velisa spec, [docs/specs/licence-record.md](https://github.com/kajisho5/Velisa/blob/main/docs/specs/licence-record.md),
+whose base is the record `library-import` already writes (step 10, ADR-014), extended there to video and images. Roadmap step 12.
+
+**Decision.**
+- `schemas/licence-record.schema.json` (JSON Schema 2020-12) publishes two shapes: `entry`, one file's entry in `sound-library.json`
+  as `library-import` writes it, and `record`, the entry resolved for a reader by `licence_info` (the `licence` block of
+  `library-import`, `library-index` rows and provenance). Both are closed (`additionalProperties: false`).
+- The field names stay stable. A change to them is made through the Velisa spec first, then here.
+- Project credits stay with artifacts-skill `credits_attribution`.
+- Nothing in the code changes: the schema describes what is written today.
+
+**Verified.** `tests/test_licence_schema.py` validates `library-import` output (with every field, and with only the licence), the
+manifest entry on disk and the record of a file without a declared licence against the schema. It checks that the record has
+exactly the schema's fields and that a renamed field, `verified: true` or an unknown `kind` is rejected. The validator in the
+test covers the keywords the schema uses, so no third-party package is needed.
