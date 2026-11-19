@@ -26,6 +26,13 @@ def load_schema():
         return json.load(fh)
 
 
+def _json_equal(a, b):
+    """JSON equality: true and false are not the numbers 1 and 0 (Python's == says they are)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    return a == b
+
+
 def errors(value, schema, root, where="$"):
     """Every place `value` breaks `schema` (a subset of JSON Schema 2020-12: $ref into $defs, type, const, enum,
     minLength, pattern, required, properties, additionalProperties: false, items)."""
@@ -37,7 +44,7 @@ def errors(value, schema, root, where="$"):
         kinds = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
         if not any(isinstance(value, _TYPES[k]) and not (k != "boolean" and isinstance(value, bool)) for k in kinds):
             return [f"{where}: {value!r} is not {'/'.join(kinds)}"]
-    if "const" in schema and value is not schema["const"] and value != schema["const"]:
+    if "const" in schema and not _json_equal(value, schema["const"]):
         out.append(f"{where}: {value!r} is not {schema['const']!r}")
     if "enum" in schema and value not in schema["enum"]:
         out.append(f"{where}: {value!r} is not one of {schema['enum']}")
@@ -114,6 +121,7 @@ class LicenceRecordSchemaTests(unittest.TestCase):
         del renamed["licence"]
         self.assertTrue(errors(renamed, {"$ref": "#/$defs/entry"}, self.schema))
         self.assertTrue(errors(dict(doc["licence"], verified=True), {"$ref": "#/$defs/record"}, self.schema))
+        self.assertTrue(errors(dict(doc["licence"], verified=0), {"$ref": "#/$defs/record"}, self.schema))   # 0 is not false
         self.assertTrue(errors(dict(doc["entry"], kind="music"), {"$ref": "#/$defs/entry"}, self.schema))
 
     def test_the_schema_names_the_velisa_spec(self):
