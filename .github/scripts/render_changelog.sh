@@ -25,7 +25,9 @@ fi
 release_date="$(date -u +%Y-%m-%d)"
 
 {
-  echo "## v${NEXT_VERSION} - ${release_date}"
+  # `## X.Y.Z - date`, no "v": the form every hand-written section of this CHANGELOG.md uses and the tests look
+  # for (tests/test_release_scripts.py; a `## vX.Y.Z` heading broke main in v0.3.4)
+  echo "## ${NEXT_VERSION} - ${release_date}"
   echo
   # %s (subject) only: PR bodies can contain arbitrary Markdown that would break CHANGELOG.md's own
   # structure; the subject line is what squash-merge already reduces every PR to (its title, in this

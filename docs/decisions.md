@@ -800,3 +800,22 @@ Releases were cut by hand (ADR-019): a pull request bumped `pyproject.toml` and 
 - The tag's `contract/contract.json` is that tag's own contract: `git show vX.Y.Z:contract/contract.json`.
 - This replaces the tag-push release of ADR-019; its first-release notes stay as they were.
 - `tests/test_release_scripts.py` (version decision and file bump, on throwaway repositories) and `tests/test_release_labels.py` (the Dependabot label rule and its wiring) cover the scripts.
+
+## ADR-023 The release job tests its commit before pushing it; chore / ci / docs / test pull requests release nothing
+
+2026-11-19. Amends ADR-022. The ecosystem rule is Velisa ADR-023 (decision D37).
+
+### Context
+
+The release commit is pushed with the default token, so no workflow runs on it on main. The v0.3.4 release commit wrote its CHANGELOG.md heading as `## v0.3.4 - 2026-11-19`; every hand-written section reads `## X.Y.Z - date`, and `test_docs_give_the_vram_guidance` looks for `## 0.3.4`. main failed from that commit on, and pull request #29 could not merge. v0.3.4 itself released only a `ci:` change.
+
+### Decision
+
+- `.github/scripts/render_changelog.sh` writes `## X.Y.Z - date`, the form of this CHANGELOG.md. The v0.3.4 heading is corrected. `tests/test_release_scripts.py` checks the rendered heading and every heading of CHANGELOG.md.
+- The release job commits and tags locally, runs `python -m unittest discover -s tests` and `python contract/generate.py --check` on that commit, and only then pushes. A failure pushes nothing.
+- A push to main releases only when something merged since the latest tag is releasable. `.github/scripts/release_gate.py` decides: a pull request labelled `feature` / `minor` / `enhancement`, `fix` / `bug` / `patch` or `major` / `breaking` releases, and so does one with no label at all (as a patch). A pull request labelled only `chore`, `ci`, `documentation`, `docs`, `test`, `maintenance` or similar releases nothing. This is imagemagick-skill's rule. release-drafter's `default` can only be major, minor or patch, so the gate runs before it; `chore` / `maintenance` / `ci` / `documentation` / `docs` no longer map to a patch.
+
+### Consequences
+
+- A version bumped by hand in a pull request is released whatever its labels.
+- A release that would break the tests is not made; the next push retries.
