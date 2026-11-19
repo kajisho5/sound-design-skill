@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.4 - 2026-11-19
+
+- ci: release on push to main (version from PR labels, tag and GitHub Release) (#28) (1165385)
+
 ## 0.3.3 - 2026-11-19
 
 Contract shape only; no command, option, output document, tool, capability id or default changed. `contract_version` stays 1.0.
