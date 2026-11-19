@@ -48,6 +48,8 @@ sound-design sfx-cues --cuts 1,2.5,4.75 --emphasis 3.2 --library ./sounds -o cue
 sound-design sfx-cues --cuts 1,12,25 --emphasis 3.2 --library ./sounds --min-reuse-spacing 30 --character pop=bright --json   # opt-in
 ```
 
+`contract/contract.json` is the contract committed as a file (`sound-design contract --json` as one line with sorted keys, compact separators and a final newline), so the contract of any commit or tag is `git show <ref>:contract/contract.json`, with nothing installed or run. Regenerate it with `python contract/generate.py`; a unit test fails when it is stale.
+
 For agents: [SKILL.md](SKILL.md) says when to use each command, what to ask the user first (EzAudio) and how to report licences; tests keep it in step with the contract ([ADR-009](docs/decisions.md)).
 
 ## GENERATE_BGM ([ADR-004](docs/decisions.md))
