@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6 - 2026-11-19
+
+- test: the licence-schema validator tells false from 0 (#29) (da31bbf)
+
 ## 0.3.5 - 2026-11-19
 
 - fix(release): CHANGELOG heading in this file's form; test the release commit before pushing; no release for chore/ci/docs-only changes (#30) (c9a5446)
