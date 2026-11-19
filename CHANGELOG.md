@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3 - 2026-11-19
+
+Contract shape only; no command, option, output document, tool, capability id or default changed. `contract_version` stays 1.0.
+
+- The contract follows the OS contract shape (Velisa `registry/capability_contract.schema.json`, Velisa ADR-018; ADR-021): `skill` is `{id, package, version}` instead of the package name as a string, and `dependencies` lists only ffmpeg-skill, with `skill_id` added (`id`, `kind`, `version_range`, `tools`, `flags` and the rest stay). The two engines leave `dependencies`; each one's version range, licences, output-use terms, credit, watermark, install line and location stay in `engines.registered`, and `doctor` reports each as before.
+- `contract/contract.json` is the contract committed as a file (`sound-design contract --json`, one line, sorted keys), so any tag's contract is `git show <tag>:contract/contract.json`. `python contract/generate.py` regenerates it, and a unit test (`--check`) and CI fail when it is stale.
+
 ## 0.3.2 - 2026-11-13
 
 First release: the tag `v0.3.2` and its GitHub Release (roadmap step 11, ADR-019). From now on a pushed `v*` tag makes the GitHub Release from its CHANGELOG.md section (`.github/workflows/release.yml`); nothing is published to a package index. It also carries 0.3.1, 0.3.0, 0.2.0 and 0.1.0 below, which were never tagged.

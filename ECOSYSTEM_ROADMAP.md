@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-0.3.2 (no release tag yet): GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM; the 4B XL turbo model opt-in with `--model`, >= 20 GB, ADR-016), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, checked by qc-skill's loop seam check, ADR-017), tempo-targeted BGM with a beat grid (step 8, skill-side code complete; the grid checked by `scenes --beats`, ADR-018), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
+0.3.3 (released v0.3.2; contract in the OS contract shape and committed as contract/contract.json in 0.3.3, ADR-021): GENERATE_BGM (ACE-Step 1.5, MIT, commercial use of output stated, <4 GB VRAM; the 4B XL turbo model opt-in with `--model`, >= 20 GB, ADR-016), GENERATE_SFX (EzAudio, ADR-005) and library mode, experimental; SKILL.md and CI (step 5); loop beds, stingers and a seam check (step 7, checked by qc-skill's loop seam check, ADR-017), tempo-targeted BGM with a beat grid (step 8, skill-side code complete; the grid checked by `scenes --beats`, ADR-018), SFX cue sheets (step 9) with an opt-in reuse spacing and character filter (ADR-015), stock licence records (step 10). `scaffold` in ecosystem.json.
 
 ## What this repository owns
 
