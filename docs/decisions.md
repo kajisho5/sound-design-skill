@@ -752,6 +752,12 @@ manifest entry on disk and the record of a file without a declared licence again
 exactly the schema's fields and that a renamed field, `verified: true` or an unknown `kind` is rejected. The validator in the
 test covers the keywords the schema uses, so no third-party package is needed.
 
+**Linked (2026-11-27).** The shared spec lives in Velisa: `docs/specs/licence-record.md` links this schema (Velisa #162), and
+`registry/schemas/licence-record.schema.json` is Velisa's machine-readable copy, the same fields plus the extension to video,
+images and AI-generated assets (Velisa ADR-024, #181). `VelisaSharedSpecTests` (integration job, Velisa main checked out) checks
+that the spec links this file, that `library-import`'s entry and record are valid under Velisa's copy, and that the copy keeps
+every field of this one. A change to the shape is made in the Velisa spec first; this repository follows it.
+
 ## ADR-021 The contract in the OS contract shape: `skill` as an object, Skill-only `dependencies`
 
 2026-11-19.
